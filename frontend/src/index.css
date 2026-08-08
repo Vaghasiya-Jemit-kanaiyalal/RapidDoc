@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased font-sans;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(225, 235, 255, 0.4) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(240, 244, 255, 0.4) 0px, transparent 50%);
+    background-attachment: fixed;
+  }
+}
+
+/* Glassmorphism class */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.glass-dark {
+  background: rgba(15, 23, 42, 0.3);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Custom animations */
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+  100% { transform: translateY(0px); }
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+/* Gemini-style AI loading spinner: zoom in and out */
+@keyframes ai-zoom {
+  0% { transform: scale(0.78); opacity: 0.85; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(0.78); opacity: 0.85; }
+}
+
+.animate-ai-zoom {
+  animation: ai-zoom 1.5s ease-in-out infinite;
+}
+
+/* Soft pulsing glow behind the AI spinner */
+@keyframes ai-glow {
+  0% { box-shadow: 0 0 0 0 rgba(54, 92, 255, 0.25); }
+  50% { box-shadow: 0 0 0 18px rgba(54, 92, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(54, 92, 255, 0); }
+}
+
+.animate-ai-glow {
+  animation: ai-glow 1.5s ease-out infinite;
+}
+
+/* Blue text-selection highlight (as in the design's "selected paragraph") */
+.selection-highlight {
+  background: rgba(54, 92, 255, 0.12);
+  box-shadow: 0 0 0 4px rgba(54, 92, 255, 0.12);
+  border-radius: 6px;
+}
+
+/* Purple / green highlight runs inside the mockup paragraph */
+.hl-purple {
+  background: rgba(139, 92, 246, 0.22);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+.hl-green {
+  background: rgba(34, 197, 94, 0.22);
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+/* Nav link underline */
+.nav-link {
+  position: relative;
+}
+.nav-link::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  height: 2px;
+  width: 0;
+  border-radius: 999px;
+  background: #365CFF;
+  transform: translateX(-50%);
+  transition: width 300ms ease;
+}
+.nav-link:hover::after {
+  width: 24px;
+}
+.nav-link-active::after {
+  width: 40px;
+}
+.nav-link:hover {
+  color: #365CFF;
+  transition: color 300ms ease;
+}
+
+/* Soft scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(203, 213, 225, 1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 1);
+}

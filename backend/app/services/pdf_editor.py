@@ -183,20 +183,33 @@ def find_replace_pdf(pdf_path: str, output_path: str, find_text: str, replace_te
         count = 0
 
         for page in doc:
-            # We search for occurrences. pyMuPDF has case insensitive flag unless fitz.TEXT_CASE_SENSITIVE is set
-            flags = fitz.TEXT_DEHYDRATE
-            if case_sensitive:
-                # fitz search_for flags:
-                # TEXT_CASE_SENSITIVE = 2
-                flags = flags | 2
-
-            rects = page.search_for(find_text, flags=flags)
+            rects = page.search_for(find_text)
+            targets = []
             for rect in rects:
-                # White-out text bounding box
-                page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
-                # Estimate a fitting font size
+                if case_sensitive:
+                    found = page.get_textbox(rect)
+                    if found is None or found.strip() != find_text:
+                        continue
+                targets.append(rect)
+
+            if not targets:
+                continue
+
+            # Use redaction to properly remove original text from the content stream
+            for rect in targets:
+                page.add_redact_annot(rect)
+            page.apply_redactions()
+
+            # Insert replacement text at each original position
+            for rect in targets:
                 fontsize = max(6.0, rect.height - 2)
-                page.insert_textbox(rect, replace_text, fontsize=fontsize, fontname="helv", color=(0.1, 0.1, 0.1), align=0)
+                page.insert_text(
+                    (rect.x0, rect.y1 - 2),
+                    replace_text,
+                    fontsize=fontsize,
+                    fontname="helv",
+                    color=(0.1, 0.1, 0.1),
+                )
                 count += 1
 
         _save_pdf(doc, output_path)

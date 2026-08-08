@@ -142,13 +142,16 @@ Interactive docs are available at `http://localhost:8000/docs` (Swagger UI).
 - **Python 3.10+**
 - **Node.js 18+**
 - **MongoDB Community Server** — [download](https://www.mongodb.com/try/download/community)
+- **LibreOffice** *(optional)* — [download](https://www.libreoffice.org/download/download/). Only needed for the DOCX → PDF **preview** feature; PDF preview and all other features work without it.
 
 ### Option 1 — One-Click Launcher (Windows)
 Double-click **`run_dev.bat`**. It:
 1. Creates `backend/storage` and `mongodb_data` folders if missing
-2. Starts MongoDB on `mongodb_data`
-3. Launches the FastAPI backend on `http://localhost:8000`
-4. Launches the React frontend on `http://localhost:5173`
+2. Creates `backend/.env` from `.env.example` and auto-generates a `JWT_SECRET_KEY`
+3. Creates the Python venv, installs requirements, and runs `npm install` if needed
+4. Starts MongoDB (on `mongodb_data` or the Windows service)
+5. Launches the FastAPI backend on `http://localhost:8000`
+6. Launches the React frontend on `http://localhost:5173`
 
 ### Option 2 — Manual Setup
 

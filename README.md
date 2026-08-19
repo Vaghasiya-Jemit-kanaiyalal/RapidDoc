@@ -1,216 +1,278 @@
-# RapidDoc — AI-Powered Document Intelligence & Editing Platform
+# 📄 RapidDoc: Architecture & Module Task Distribution 🚀
 
-**RapidDoc** is a full-stack web application that unifies a traditional document editor with an AI-powered document-understanding layer. Upload a **PDF** or **DOCX**, edit content and styling, issue **natural-language commands**, and export the final editable document — all from a single interface. No more switching between Word, Acrobat, translators, and summarizers.
-
----
-
-## ✨ Key Features
-
-### 👤 Authentication & User Accounts
-- **Register** with full-name, email and password — client-side validation with a live **password-strength meter** (Weak / Medium / Strong / Very Strong)
-- **Login** with JWT-based session handling (token persisted in `localStorage`)
-- **Logout** and protected routes — documents are always scoped to the logged-in user
-- Session restore on page refresh via `/api/auth/me`
-- Smart view routing: logged-in users land on their Dashboard; guest-only screens (Login/Register) are never shown to authenticated users
-
-### 📤 Document Upload
-- **Drag-and-drop** or click-to-browse upload zone
-- Supported formats: **`.pdf`** and **`.docx`** (max **10 MB**)
-- Upload-time validation, animated progress state, and clear error messages
-- Automatic image-count detection per document
-
-### 📖 Document Dashboard (Document Hub)
-- Personal document library filtered to the current user
-- Per-document **Edit** and **Download** actions with upload dates
-- Refresh / loading / empty-state handling
-
-### ✍️ Document Editor & Content Editing
-- View the extracted text content of PDF and DOCX files
-- **Edit paragraph content** in place (paragraph-index based for DOCX, page + text-block based for PDF)
-- **Save edits** straight back into the file
-
-### 🔍 Find & Replace
-- Replace text across the whole document with **case-sensitive** toggle
-- Applies to body paragraphs **and table cells** (DOCX)
-- Reports the number of matches replaced
-
-### 🎨 Styling Panel
-- **Font family** (Arial, Times New Roman, Calibri, Courier New)
-- **Font size** (6–72 pt)
-- **Header text** and **Footer text** for every section
-- **Image replacement** — pick an image index and upload a new image to swap it (works for both PDF and DOCX)
-
-### 🤖 RapidDoc AI — Natural Language Command Interface
-- Type a plain-English command into the AI prompt bar, e.g. `replace "sales" with "revenue"`
-- AI understands intent and **executes the edit automatically** (e.g. find-and-replace across the document)
-- Gemini-style **AI processing overlay** with cycling status messages:
-  *Initializing → Scanning → Finding text blocks → Analyzing content → Applying changes*
-- Response feedback confirming exactly what was changed
-
-### 🗂️ Document Info
-- File name, type (PDF/DOCX), image count
-- **Edit history** timeline tracking every upload, style update, content edit, and find-and-replace action
-
-### 🏠 Landing Page & Navigation
-- Marketing landing page with hero, features, and "How It Works" sections
-- Context-aware CTAs: guests see *Login / Get Started*, signed-in users see *Go to Dashboard*
-- Home / Dashboard navigation available from the editor and every screen
+> **RapidDoc** is an intelligent, NLP-powered document editor and comprehension platform designed to modify, reformat, summarize, and convert documents through natural language instructions.
 
 ---
 
-## 🧱 Tech Stack
+## 🏗️ 1. High-Level System Architecture
 
-| Layer | Technology |
-|---|---|
-| **Frontend** | React 19, Vite 8, Tailwind CSS 3, Lucide Icons, Oxlint |
-| **Backend** | FastAPI (Python) + Uvicorn |
-| **Document Processing** | `python-docx` (DOCX), PyMuPDF `fitz` (PDF) |
-| **Database** | MongoDB (via PyMongo) |
-| **Authentication** | JWT (python-jose), Bcrypt password hashing |
-| **Storage** | Local filesystem (`backend/storage`), path-traversal-safe |
-
----
-
-## 📁 Project Structure
-
-```
-RapidDoc/
-├── backend/
-│   ├── app/
-│   │   ├── main.py                 # FastAPI app, CORS, global error handlers
-│   │   ├── config.py               # Settings from .env (pydantic-settings)
-│   │   ├── database.py             # MongoDB connection manager
-│   │   ├── models.py               # Pydantic request/response models
-│   │   ├── routers/
-│   │   │   ├── auth.py             # Register / Login / Me
-│   │   │   └── documents.py        # Upload / List / Download / Style / Content / Find-Replace
-│   │   └── services/
-│   │       ├── storage.py          # File storage with traversal protection
-│   │       ├── docx_editor.py      # DOCX styling, content, find-replace
-│   │       └── pdf_editor.py       # PDF styling, content, find-replace
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── storage/                    # Uploaded documents
-├── frontend/
-│   └── src/
-│       ├── App.jsx                 # Landing, Dashboard, routing & main layout
-│       ├── components/
-│       │   ├── Auth/Login.jsx      # Login screen
-│       │   ├── Auth/Register.jsx   # Register + password strength
-│       │   ├── Dashboard/UploadZone.jsx    # Drag-and-drop upload
-│       │   ├── Dashboard/DocumentList.jsx  # Document library
-│       │   ├── Editor/DocumentWorkspace.jsx# Editor + AI prompt bar
-│       │   └── Editor/StylingPanel.jsx     # Fonts / header / footer / images
-│       ├── context/AuthContext.jsx # Auth state, login/register/logout
-│       └── utils/download.js       # File download helper
-├── run_dev.bat                     # One-click dev launcher
-└── README.md
+```text
+                         ┌────────────────────────┐
+                         │  🌐 Client / Frontend  │
+                         │ (React / Next.js / UI) │
+                         └───────────┬────────────┘
+                                     │
+                        REST API / Multipart Upload
+                                     │
+                                     ▼
+                         ┌────────────────────────┐
+                         │ ⚡ FastAPI Backend Core │
+                         │  (Session & Pipeline)  │
+                         └───────────┬────────────┘
+                                     │
+             ┌───────────────────────┴───────────────────────┐
+             ▼                                               ▼
+  📂 [ Document Ingestion ]                       🧠 [ Natural Language NLU ]
+  - PyMuPDF / pdfplumber                          - DistilBERT Intent Classifier
+  - python-docx                                   - Rule/Regex Slot Extractor
+  - LibreOffice Headless                          - Joint Token BIO Extractor
+             │                                               │
+             └───────────────────────┬───────────────────────┘
+                                     ▼
+                       ┌───────────────────────────┐
+                       │   🔀 Central Dispatcher & │
+                       │     Execution Router      │
+                       └─────────────┬─────────────┘
+                                     │
+        ┌────────────────────────────┼────────────────────────────┐
+        ▼                            ▼                            ▼
+┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────────┐
+│ ⚙️ Deterministic     │   │ 🤖 Local Fine-Tuned  │   │ 📊 Pretrained &      │
+│    DOCX Engine       │   │    Seq2Seq           │   │    Unsupervised ML   │
+├──────────────────────┤   ├──────────────────────┤   ├──────────────────────┤
+│ - Headers/Footers    │   │ - Text Rewriting     │   │ - Summarization      │
+│ - Find & Replace     │   │   (CoEdIT / T5)      │   │   (BART-CNN)         │
+│ - Fonts & Styles     │   │ - MCQ Generation     │   │ - Translation        │
+│ - Align / Margins    │   │   (RACE / T5)        │   │   (MarianMT)         │
+│ - Page Numbers       │   │ - Flashcards & Viva  │   │ - Keywords           │
+│ - Image Replace      │   │   Questions          │   │   (YAKE/KeyBERT)     │
+└──────────┬───────────┘   └──────────┬───────────┘   └──────────┬───────────┘
+           │                          │                          │
+           └──────────────────────────┼──────────────────────────┘
+                                      │
+                                      ▼
+                       ┌───────────────────────────┐
+                       │ 📦 Document Reconstruction│
+                       │     & Export Pipeline     │
+                       │    (DOCX / PDF / TXT)     │
+                       └───────────────────────────┘
 ```
 
 ---
 
-## 🔄 How It Works
+## 🧩 2. Module-Wise Task Distribution & Roles
+
+### 📂 Module 1: Document Ingestion & Reconstruction Engine
+* **Role**: Parses multi-format input documents into an internal canonical tree structure (`python-docx` Document Object) and handles clean serialization on export.
+* **Supported Formats**: `.docx`, `.pdf`, `.txt`, `.pptx`.
+* **Key Tasks**:
+  * 📄 **DOCX Ingestion**: Direct structured parsing with zero formatting loss using `python-docx`.
+  * 📑 **PDF Extraction**: Extracts text runs, font sizing, and visual positions via `PyMuPDF` / `pdfplumber`, reconstructing a structured `.docx` representation.
+  * 🩹 **Direct PDF Patching**: Performs lightweight text replacements directly on PDF files via `PyMuPDF` without re-layout.
+  * 💾 **Export Pipeline**: Native output for DOCX/TXT; headless LibreOffice integration (`soffice --headless --convert-to pdf`) for high-fidelity PDF rendering.
+
+---
+
+### 🧠 Module 2: NLU & Intent Classification Router
+* **Role**: Maps free-form natural language instructions to an unambiguous structured execution payload.
+* **Components**:
+  * 🎯 **Intent Classifier**: Fine-tuned `distilbert-base-uncased` sequence classifier handling 22 distinct intent classes (e.g., `change_header`, `replace_text`, `summarize_page`, `generate_mcq`).
+  * 🔍 **Slot Extractor**: Deterministic entity parser extracting parameters (`page`, `target_text`, `old_text`, `new_text`, `font_name`, `color`, `alignment`).
+* **Standard JSON Output Schema**:
+```json
+  {
+    "intent": "replace_text",
+    "confidence": 0.99,
+    "slots": {
+      "old_text": "Draft v2",
+      "new_text": "Final Submission",
+      "page": null
+    }
+  }
 
 ```
-Upload Document → Enter Natural-Language Command → AI Understands Intent
-      → Document Processing Engine Executes the Operation
-      → Preview Updated Document → Download Final Document
+
+---
+
+### ⚙️ Module 3: Deterministic Document Execution Engine
+
+* **Role**: Manipulates document XML and object trees directly to guarantee deterministic results and avoid hallucinations.
+
+
+* **Key Tasks**:
+* 🏷️ **Header & Footer Management**: Updates target section headers/footers with isolated linkage.
+
+
+* 🔄 **Cross-Run Text Replacement**: Coalesces adjacent text runs so find-and-replace operates accurately even across fragmented XML boundaries.
+
+
+* 🎨 **Font & Style Mutation**: Modifies font families, point sizes, colors, and styling (`bold`, `italic`, `underline`).
+
+
+* 📐 **Layout Alignment**: Configures paragraph alignment (`left`, `center`, `right`, `justify`), background highlighting, and dynamic XML page numbering fields.
+
+
+* 🖼️ **Image & Logo Replacement**: Updates inline drawings and blip fill image relationships in the package archive.
+
+
+
+
+
+---
+
+### 🤖 Module 4: Local Neural Generation Engine (Seq2Seq Tasks)
+
+* **Role**: Handles natural language transformation and educational content generation using locally hosted transformer models.
+
+
+* **Key Tasks**:
+* ✍️ **Targeted Text Rewriter**: Fine-tuned `T5-small` / `Flan-T5` on the `grammarly/coedit` dataset for instruction-guided grammar fixing, tone shifts, and simplification.
+
+
+* 🎓 **Assessment Generator**: Fine-tuned `T5-small` / `BART-base` on the `ehovy/race` dataset to output structured MCQs with distractors, flashcards, and viva examination questions.
+
+
+
+
+
+---
+
+### 📊 Module 5: Pretrained & Unsupervised Document Analytics Engine
+
+* **Role**: Provides fast, offline document summarization, keyword extraction, and translation without per-token API overhead.
+
+
+* **Key Tasks**:
+* 📝 **Abstractive Summarizer**: Self-hosted `facebook/bart-large-cnn` for multi-paragraph or section-level document summarization.
+
+
+* 🔑 **Keyword Extraction**: Statistical, hallucination-free keyphrase extraction using `YAKE` / `KeyBERT`.
+
+
+* 🌐 **Offline Translation**: Local neural machine translation using self-hosted `Helsinki-NLP/opus-mt-*` models.
+
+
+
+
+
+---
+
+### ⚡ Module 6: Backend Orchestration & Session Store (FastAPI)
+
+* **Role**: Handles asynchronous request dispatching, session document persistence across multi-turn prompts, and file streaming.
+
+
+* **Core API Endpoints**:
+* `POST /api/v1/document/upload` ➔ Upload document, initialize in-memory state, return `doc_id`.
+
+
+* `POST /api/v1/document/command` ➔ Receive `{doc_id, prompt}`, run NLU, dispatch execution handler, stack changes, return status.
+
+
+* `GET /api/v1/document/preview/{doc_id}` ➔ Return real-time rendered HTML/PDF preview.
+
+
+* `GET /api/v1/document/export/{doc_id}?format=...` ➔ Export document in requested format (`.docx`, `.pdf`, `.txt`).
+
+
+
+
+
+---
+
+## 📊 3. Implementation Matrix: ML Models vs. Deterministic Handlers
+
+| Feature / Task | Implementation Strategy | Model / Framework | Dataset / Pipeline |
+| --- | --- | --- | --- |
+| **Intent Recognition** | Sequence Classification | `distilbert-base-uncased` | RapidDoc Intent Dataset (7,100 records)
+| **Slot Extraction** | Deterministic / BIO Head | Custom Parser / BERT | Heuristic Rules ➔ Joint Token Head
+| **Header / Footer Edit** | Deterministic DOM | `python-docx` | None (Rule-Based DOM)
+| **Find & Replace / Delete** | Deterministic DOM | `python-docx` (Cross-Run) | None (Rule-Based DOM)
+| **Font & Style Mutation** | Deterministic DOM | `python-docx` | None (Rule-Based DOM)
+| **Page Number Insertion** | Deterministic XML | `python-docx` OXML | None (Rule-Based XML)
+| **Instructional Rewriting** | Fine-Tuned Seq2Seq | `T5-small` / `Flan-T5` | `grammarly/coedit` (69k records)
+| **MCQ & Assessment Gen** | Fine-Tuned Seq2Seq | `T5-small` / `BART-base` | `ehovy/race` (20k records)
+| **Document Summarization** | Pretrained Seq2Seq | `facebook/bart-large-cnn` | Zero-Shot Evaluation on `cnn_dailymail`<br> |
+| **Keyword Extraction** | Statistical NLP | `YAKE` / `KeyBERT` | Unsupervised Extraction
+| **Language Translation** | Pretrained Seq2Seq | `Helsinki-NLP/opus-mt` | Self-Hosted Open Weights
+
+---
+
+## 📅 4. 12-Week Implementation Roadmap
+
+```
+Week  1: 🎯 Scope Definition, Taxonomy Locking & Architecture Design
+Week  2: 📝 Intent Dataset Generation, Validation & Class Balancing
+Week  3: 🧠 Intent Classifier Training (DistilBERT) & Slot Extractor Engine
+Week  4: ⚙️ Core Deterministic DOCX Execution Engine (Formatting, Headers, Text)
+Week  5: 🔍 Advanced Document Manipulation (Multi-Run Replacement & Images)
+Week  6: 📥 Task Dataset Ingestion (RACE, CoEdIT, CNN/DailyMail) & Baseline Pipeline
+Week  7: 🤖 Fine-Tuning Seq2Seq Models (MCQ & Text Editing)
+Week  8: 📊 Summarization, Keyword Extraction & Translation Integration
+Week  9: 🔄 Document Conversion Subsystem (PDF/TXT Ingestion & LibreOffice Export)
+Week 10: ⚡ FastAPI Backend Development & Session State Manager
+Week 11: 🌐 Next.js/React Frontend Integration & Real-Time Document Preview Pane
+Week 12: 🚀 End-to-End Stress Testing, Evaluation Benchmarking & Final Deployment
+
 ```
 
-### Backend API Endpoints
+### 🗓️ Phase-Wise Breakdown
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/auth/register` | Create a new account |
-| `POST` | `/api/auth/login` | Login, returns a JWT token |
-| `GET` | `/api/auth/me` | Current authenticated user |
-| `POST` | `/api/documents/upload` | Upload PDF/DOCX (max 10 MB) |
-| `GET` | `/api/documents` | List user's documents |
-| `GET` | `/api/documents/{id}/download` | Download the file |
-| `POST` | `/api/documents/{id}/style` | Apply font/header/footer/image changes |
-| `GET` | `/api/documents/{id}/content` | Get extracted text content |
-| `POST` | `/api/documents/{id}/content` | Save content edits |
-| `POST` | `/api/documents/{id}/find-replace` | Find & replace text |
+* **Phase 1: NLU Foundations & Dataset Engineering (Weeks 1–3)**
+* Finalize 22-intent classification taxonomy and explicit slot schemas.
 
-Interactive docs are available at `http://localhost:8000/docs` (Swagger UI).
 
----
+* Generate, validate, and balance the 7,100 JSONL records across 80/10/10 train/val/test splits.
 
-## 🚀 Getting Started
 
-### Prerequisites
-- **Python 3.10+**
-- **Node.js 18+**
-- **MongoDB Community Server** — [download](https://www.mongodb.com/try/download/community)
-- **LibreOffice** *(optional)* — [download](https://www.libreoffice.org/download/download/). Only needed for the DOCX → PDF **preview** feature; PDF preview and all other features work without it.
+* Fine-tune DistilBERT; evaluate accuracy on held-out test splits.
 
-### Option 1 — One-Click Launcher (Windows)
-Double-click **`run_dev.bat`**. It:
-1. Creates `backend/storage` and `mongodb_data` folders if missing
-2. Creates `backend/.env` from `.env.example` and auto-generates a `JWT_SECRET_KEY`
-3. Creates the Python venv, installs requirements, and runs `npm install` if needed
-4. Starts MongoDB (on `mongodb_data` or the Windows service)
-5. Launches the FastAPI backend on `http://localhost:8000`
-6. Launches the React frontend on `http://localhost:5173`
 
-### Option 2 — Manual Setup
 
-**Backend:**
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate              # Windows
-pip install -r requirements.txt
-copy .env.example .env            # Windows
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+* **Phase 2: Deterministic Document Engine (Weeks 4–5)**
+* Implement header, footer, style, font, size, and margin executors.
+
+
+* Implement cross-run text replacement algorithm to search and update fragmented XML strings.
+
+
+* Add image/logo injection and dynamic XML page numbering fields.
+
+
+
+
+* **Phase 3: Task Model Fine-Tuning & NLP Engine (Weeks 6–8)**
+* Download and preprocess `CoEdIT` and `RACE` datasets.
+
+
+* Fine-tune `T5-small` for instruction-guided text rewriting and MCQ generation.
+
+
+* Integrate `BART-large-cnn` summarization and `YAKE` unsupervised keyword extraction pipelines.
+
+
+
+
+* **Phase 4: Pipeline Ingestion, Backend & UI (Weeks 9–11)**
+* Implement `PyMuPDF` PDF parsing and headless LibreOffice conversion pipelines.
+
+
+* Build asynchronous FastAPI endpoints with session persistence for sequential edit stacking.
+
+
+* Connect Next.js/React frontend with file dropzones, prompt inputs, and side-by-side live previews.
+
+
+
+
+* **Phase 5: Evaluation, Dockerization & Release (Week 12)**
+* Measure end-to-end latency, exact-match slot accuracy, ROUGE summarization scores, and formatting preservation.
+* Containerize the unified backend and model-serving runtime with Docker.
+
+
+* Finalize repository documentation and user release guides.
+
+
+
 ```
-
-**Frontend:**
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Then open **http://localhost:5173** and register an account.
-
----
-
-## 📚 Useful Commands
-
-| Command | Purpose |
-|---|---|
-| `npm run dev` | Start Vite dev server (frontend) |
-| `npm run build` | Production build |
-| `npm run lint` | Lint with Oxlint |
-| `python -m uvicorn app.main:app --reload` | Start backend |
-
----
-
-## 🗺️ Roadmap (Planned)
-
-Per the project proposal, the following AI capabilities are planned for the AI pipeline:
-
-- 📝 **Summarization** — generate document summaries
-- 🌐 **Translation** — multilingual translation
-- 🧠 **Study Notes** — automatic note generation
-- ❓ **MCQ Generation** — quiz questions from content
-- 🃏 **Flashcards** — flashcard creation
-- 🎤 **Viva Question Generation**
-- 🔑 **Keyword Extraction**
-- 📊 **PPTX / TXT export** (secondary formats)
-
----
-
-## 🏛️ Academic Project Details
-
-From the project proposal (Semester 5, DEPSTAR — CHARUSAT):
-
-- **Project ID:** `PRJ_CSE_5_2026_28`
-- **Domain:** Artificial Intelligence (AI), Natural Language Processing (NLP), Document Engineering, Web Application Development
-- **Team:** 24DCS145 (Team Lead), 24DCS135, 24DCS140
-- **Target Users:** Students, faculty, businesses, and researchers
-
----
-
-© 2026 RapidDoc. All rights reserved.

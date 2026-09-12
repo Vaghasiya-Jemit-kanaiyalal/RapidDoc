@@ -1,0 +1,47 @@
+# Environment & Secret files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Local Database & Storage Data
+mongodb_data/
+storage/
+backend/storage/
+Design/
+reports/
+
+
+# Python / Bytecode / Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.pytest_cache/
+
+# Node / Web Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.npm
+.eslintcache
+
+# Logs & Temporary files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE & OS Specific
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

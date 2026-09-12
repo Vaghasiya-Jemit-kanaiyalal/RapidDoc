@@ -1,0 +1,29 @@
+Total records: 8400
+Intent classes: 24
+Train: 6720 | Val: 840 | Test: 840
+
+Per-intent counts (train split):
+  add_bullets: 280
+  change_font: 280
+  change_font_size: 280
+  change_footer: 280
+  change_header: 280
+  change_language: 280
+  change_title: 280
+  check_grammar: 280
+  delete_paragraph: 280
+  extract_keywords: 280
+  generate_flashcards: 280
+  generate_mcq: 280
+  generate_viva_questions: 280
+  insert_image: 280
+  insert_page_number: 280
+  insert_text: 280
+  justify_text: 280
+  remove_image: 280
+  remove_page_number: 280
+  replace_logo: 280
+  replace_text: 280
+  summarize_document: 280
+  summarize_page: 280
+  translate_section: 280

@@ -1,0 +1,1 @@
+# RapidDoc app package initialization

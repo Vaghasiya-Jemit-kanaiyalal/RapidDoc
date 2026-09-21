@@ -3,6 +3,9 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    scroll-behavior: smooth;
+  }
   body {
     @apply bg-slate-50 text-slate-900 antialiased font-sans;
     background-image: 
@@ -104,6 +107,48 @@
 .nav-link:hover {
   color: #365CFF;
   transition: color 300ms ease;
+}
+
+/* Animated mesh gradient for hero background */
+@keyframes mesh-move {
+  0%, 100% { background-position: 0% 50%; }
+  25% { background-position: 100% 25%; }
+  50% { background-position: 100% 50%; }
+  75% { background-position: 0% 75%; }
+}
+
+.mesh-gradient {
+  background: linear-gradient(
+    -45deg,
+    rgba(54, 92, 255, 0.06),
+    rgba(139, 92, 246, 0.05),
+    rgba(54, 92, 255, 0.04),
+    rgba(99, 102, 241, 0.06)
+  );
+  background-size: 400% 400%;
+  animation: mesh-move 15s ease infinite;
+}
+
+/* Section wave divider */
+.wave-divider {
+  position: relative;
+  overflow: hidden;
+}
+.wave-divider::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 100%;
+  height: 80px;
+  background: white;
+  clip-path: ellipse(55% 100% at 50% 0%);
+  z-index: 1;
+}
+
+/* Counter number monospace for smooth counting */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Soft scrollbar */

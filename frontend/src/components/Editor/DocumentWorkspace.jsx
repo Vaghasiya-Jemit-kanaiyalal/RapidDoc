@@ -18,13 +18,26 @@ const AI_STATUSES = [
 ];
 
 export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome }) => {
-  const [doc, setDoc] = useState(initialDoc);
+  const [doc, setDoc] = useState(initialDoc || null);
   
   // Pipeline state
-  const [pipelineStage, setPipelineStage] = useState(initialDoc.pipeline_stage || 1);
-  const [completionPercent, setCompletionPercent] = useState(initialDoc.completion_percent || 25);
-  const [pipelineStatus, setPipelineStatus] = useState(initialDoc.pipeline_status || 'In Progress');
+  const [pipelineStage, setPipelineStage] = useState(initialDoc?.pipeline_stage || 1);
+  const [completionPercent, setCompletionPercent] = useState(initialDoc?.completion_percent || 25);
+  const [pipelineStatus, setPipelineStatus] = useState(initialDoc?.pipeline_status || 'In Progress');
   const [savingProgress, setSavingProgress] = useState(false);
+
+  // Sync state if initialDoc changes
+  useEffect(() => {
+    if (initialDoc) {
+      setDoc(initialDoc);
+      setPipelineStage(initialDoc.pipeline_stage || 1);
+      setCompletionPercent(initialDoc.completion_percent || 25);
+      setPipelineStatus(initialDoc.pipeline_status || 'In Progress');
+      if (initialDoc.draft_edits && Object.keys(initialDoc.draft_edits).length > 0) {
+        setPendingEdits(initialDoc.draft_edits);
+      }
+    }
+  }, [initialDoc]);
 
   // Log drawer state
   const [showLogDrawer, setShowLogDrawer] = useState(false);
@@ -45,14 +58,8 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   
   // Editing state
   const [editingIndex, setEditingIndex] = useState(null);
-  const [pendingEdits, setPendingEdits] = useState({});
+  const [pendingEdits, setPendingEdits] = useState(initialDoc?.draft_edits || {});
   const [savingEdits, setSavingEdits] = useState(false);
-
-  useEffect(() => {
-    if (initialDoc && initialDoc.draft_edits && Object.keys(initialDoc.draft_edits).length > 0) {
-      setPendingEdits(initialDoc.draft_edits);
-    }
-  }, [initialDoc]);
 
   // AI Assistant state
   const [aiPrompt, setAiPrompt] = useState('');
@@ -81,6 +88,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   const [fullPreviewError, setFullPreviewError] = useState('');
 
   const refreshFullPreview = async () => {
+    if (!doc?.id) return;
     setFullPreviewLoading(true);
     setFullPreviewError('');
     try {
@@ -109,9 +117,11 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   };
 
   useEffect(() => {
-    refreshFullPreview();
+    if (doc?.id) {
+      refreshFullPreview();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.id]);
+  }, [doc?.id]);
 
   // Revoke the generated object URL when it changes or on unmount
   useEffect(() => {
@@ -478,6 +488,34 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     }
   };
 
+  if (!doc) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+        <div className="p-6 bg-white rounded-3xl shadow-card border border-borderline max-w-md w-full space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-brand-50 text-brand-600 flex items-center justify-center mx-auto">
+            <FileText className="w-6 h-6" />
+          </div>
+          <h3 className="text-lg font-bold text-ink">No Document Selected</h3>
+          <p className="text-xs text-secondary">Please choose a document from your dashboard or upload a new one to start editing.</p>
+          <div className="flex gap-2 justify-center pt-2">
+            <button 
+              onClick={onBack || onHome} 
+              className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
+            >
+              Go to Dashboard
+            </button>
+            <button 
+              onClick={onHome} 
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-ink font-bold text-xs rounded-xl cursor-pointer"
+            >
+              Home
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden relative">
       {/* Slim Top Bar */}
@@ -552,7 +590,14 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         pipelineStatus={pipelineStatus}
         onSelectStage={(stage) => {
           setPipelineStage(stage);
-          if (stage === 2) setHfModalOpen(true);
+          const percent = Math.min(100, stage * 25);
+          setCompletionPercent(percent);
+          if (stage === 2) {
+            setHfInitialSection('both');
+            setHfModalOpen(true);
+          } else if (stage === 4) {
+            handleFinalizePipeline();
+          }
         }}
         onSaveProgress={handleSaveProgress}
         onFinalize={handleFinalizePipeline}

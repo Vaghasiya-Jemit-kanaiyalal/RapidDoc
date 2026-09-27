@@ -2,7 +2,7 @@ import os
 import shutil
 import uuid
 import logging
-from app.config import settings
+from RapidDoc.backend.app.config import settings
 
 logger = logging.getLogger(__name__)
 

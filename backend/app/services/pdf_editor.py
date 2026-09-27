@@ -29,6 +29,13 @@ def get_pdf_images_count(pdf_path: str) -> int:
         logger.error("Error counting images in PDF: %s", e)
         return 0
 
+def _page_zone_text(page, rect) -> str:
+    try:
+        return page.get_text("text", clip=rect).strip()
+    except Exception:
+        return ""
+
+
 def apply_pdf_styling(
     pdf_path: str,
     output_path: str,
@@ -36,7 +43,10 @@ def apply_pdf_styling(
     font_size: float = None,  # For new additions like headers/footers
     header_text: str = None,
     footer_text: str = None,
-    image_replacements: list = None  # List of dicts: [{"target_index": int, "image_bytes": bytes}]
+    target_header_text: str = None,
+    target_footer_text: str = None,
+    image_replacements: list = None,  # List of dicts: [{"target_index": int, "image_bytes": bytes}]
+    alignment: str = None
 ) -> bool:
     try:
         doc = _open_pdf(pdf_path)
@@ -75,46 +85,54 @@ def apply_pdf_styling(
                 pdf_font = "helv"
 
         f_size = font_size if font_size else 10.0
+        align_map = {
+            "left": fitz.TEXT_ALIGN_LEFT,
+            "center": fitz.TEXT_ALIGN_CENTER,
+            "right": fitz.TEXT_ALIGN_RIGHT,
+        }
+        align = align_map.get((alignment or "center").lower(), fitz.TEXT_ALIGN_CENTER)
 
         for page in doc:
             # Page dimensions
             width = page.rect.width
             height = page.rect.height
 
-            # Apply Header
+            # Apply Header (only when targeted/current header matches)
             if header_text is not None:
-                # White-out original header area (top 45 points)
                 header_rect = fitz.Rect(0, 0, width, 45)
-                page.draw_rect(header_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
+                current_header = _page_zone_text(page, header_rect)
+                if target_header_text is None or current_header == target_header_text:
+                    # White-out original header area (top 45 points)
+                    page.draw_rect(header_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
+                    # Write new header centered and auto-wrapped within the top band
+                    text_rect = fitz.Rect(10, 5, width - 10, 45)
+                    page.insert_textbox(
+                        text_rect,
+                        header_text,
+                        fontsize=f_size,
+                        fontname=pdf_font,
+                        color=(0.2, 0.2, 0.2),
+                        align=align,
+                        overlay=True
+                    )
 
-                # Write new header centered and auto-wrapped within the top band
-                text_rect = fitz.Rect(10, 5, width - 10, 45)
-                page.insert_textbox(
-                    text_rect,
-                    header_text,
-                    fontsize=f_size,
-                    fontname=pdf_font,
-                    color=(0.2, 0.2, 0.2),
-                    align=fitz.TEXT_ALIGN_CENTER,
-                    overlay=True
-                )
-
-            # Apply Footer
+            # Apply Footer (only when targeted/current footer matches)
             if footer_text is not None:
-                # White-out original footer area (bottom 45 points)
                 footer_rect = fitz.Rect(0, height - 45, width, height)
-                page.draw_rect(footer_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
-
-                text_rect = fitz.Rect(10, height - 45, width - 10, height - 5)
-                page.insert_textbox(
-                    text_rect,
-                    footer_text,
-                    fontsize=f_size,
-                    fontname=pdf_font,
-                    color=(0.2, 0.2, 0.2),
-                    align=fitz.TEXT_ALIGN_CENTER,
-                    overlay=True
-                )
+                current_footer = _page_zone_text(page, footer_rect)
+                if target_footer_text is None or current_footer == target_footer_text:
+                    # White-out original footer area (bottom 45 points)
+                    page.draw_rect(footer_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
+                    text_rect = fitz.Rect(10, height - 45, width - 10, height - 5)
+                    page.insert_textbox(
+                        text_rect,
+                        footer_text,
+                        fontsize=f_size,
+                        fontname=pdf_font,
+                        color=(0.2, 0.2, 0.2),
+                        align=align,
+                        overlay=True
+                    )
 
         _save_pdf(doc, output_path)
         doc.close()
@@ -123,32 +141,190 @@ def apply_pdf_styling(
         logger.error("Error applying PDF styling: %s", e)
         return False
 
+def _pick_pdf_font(span_font: str) -> str:
+    """Map a detected span font name to a PyMuPDF base-14 font code."""
+    fn = (span_font or "").lower()
+    if "times" in fn or "serif" in fn:
+        return "tiro"
+    if "courier" in fn or "cour" in fn or "mono" in fn:
+        return "cour"
+    return "helv"
+
+
+def _norm_color(color) -> tuple:
+    if isinstance(color, int):
+        color = [(color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF]
+    if not color:
+        return (0.1, 0.1, 0.1)
+    vals = list(color)
+    if any(v > 1.0 for v in vals):
+        vals = [v / 255.0 for v in vals]
+    return tuple(min(1.0, max(0.0, float(v))) for v in vals)
+
+
+def _color_int_to_list(color: int) -> list:
+    return [(color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF]
+
+
+def _pick_block_style(doc, page_num: int, bbox) -> dict:
+    """Find the formatting (font code, size, color) of the text spans that
+    intersect the given bbox — reused when re-writing edited block text."""
+    try:
+        rect = fitz.Rect(bbox)
+        page = doc[page_num]
+        for b in page.get_text("dict")["blocks"]:
+            if b.get("type") != 0:
+                continue
+            for line in b.get("lines", []):
+                for sp in line.get("spans", []):
+                    if fitz.Rect(sp["bbox"]).intersects(rect):
+                        return {
+                            "font": _pick_pdf_font(sp.get("font", "")),
+                            "size": max(6.0, float(sp.get("size", 9.0))),
+                            "color": _norm_color(sp.get("color")),
+                        }
+    except Exception as e:
+        logger.error("Error picking PDF block style: %s", e)
+    return {"font": "helv", "size": 9.0, "color": (0.1, 0.1, 0.1)}
+
+
+def _whiteout_and_write_text(page, rect, text: str, style: dict):
+    """Replace the region's content: redact the original glyphs, white-out,
+    then write the new text using the detected formatting. No highlight is
+    drawn — edits look native in the file; highlighting is preview-only.
+    Text is auto-shrunk until it fits."""
+    # Physically remove the original glyphs inside the rect so re-extraction
+    # returns the new text instead of a mix of old + new.
+    try:
+        page.add_redact_annot(rect)
+        page.apply_redactions()
+    except Exception:
+        pass
+
+    page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
+    if not text:
+        return
+
+    size = style["size"]
+    font = style["font"]
+    color = style["color"]
+    while size >= 6.0:
+        rc = page.insert_textbox(
+            rect, text, fontsize=size, fontname=font, color=color, align=0, overlay=True
+        )
+        if rc >= 0:
+            return
+        size -= 0.5
+    # Last resort: baseline insert at the top-left corner (may overflow slightly
+    # but guarantees the text is written into the file).
+    page.insert_text(
+        (rect.x0, rect.y0 + 0.5),
+        text,
+        fontsize=size,
+        fontname=font,
+        color=color,
+        overlay=True,
+    )
+
+
+def _join_spans(spans: list) -> str:
+    """Join text spans without gluing adjacent words together.
+
+    PyMuPDF returns each span with its own bounding box, so two spans that meet
+    horizontally are separate words while spans on different lines need a
+    newline. Joining everything with "" (as this function used to) produced
+    text like "thequickbrownfox" in the editor and in every text export.
+    """
+    out = []
+    previous = None
+    for span in spans:
+        text = span.get("text", "")
+        if not text:
+            continue
+        if previous is not None:
+            x0, y0 = previous["bbox"][0], previous["bbox"][1]
+            cx0, cy0 = span["bbox"][0], span["bbox"][1]
+            same_line = abs(cy0 - y0) < max(1.0, previous["bbox"][3] - y0) * 0.5
+            if same_line:
+                # Only insert a space for a real horizontal gap, otherwise
+                # kerned pairs would gain phantom spaces.
+                if cx0 - previous["bbox"][2] > 0.8 and not out[-1].endswith((" ", "\n")):
+                    out.append(" ")
+            else:
+                out.append("\n")
+        out.append(text)
+        previous = span
+    return "".join(out).strip()
+
+
 def get_pdf_content(pdf_path: str) -> list:
     try:
         doc = _open_pdf(pdf_path)
         pages = []
         for i, page in enumerate(doc):
             blocks = []
-            for b in page.get_text("blocks"):
-                # b is (x0, y0, x1, y1, text, block_no, block_type)
-                # block_type is 0 for text, 1 for image
-                if b[6] == 0:
-                    text_content = b[4].strip()
-                    if text_content: # Ignore empty text blocks
-                        blocks.append({
-                            "bbox": [b[0], b[1], b[2], b[3]],
-                            "text": text_content,
-                            "block_no": b[5]
-                        })
+            images = []
+            block_no = 0
+            for b in page.get_text("dict")["blocks"]:
+                if b.get("type") != 0:
+                    # Image blocks used to be dropped entirely, which is why the
+                    # interactive view never showed pictures. They are reported
+                    # separately so text block numbering (used for editing) is
+                    # untouched.
+                    continue
+                spans = [sp for line in b.get("lines", []) for sp in line.get("spans", [])]
+                spans = [sp for sp in spans if sp.get("text")]
+                text_content = _join_spans(spans)
+                if not text_content:
+                    continue
+                first = spans[0] if spans else {}
+                blocks.append({
+                    "bbox": list(b["bbox"]),
+                    "text": text_content,
+                    "block_no": block_no,
+                    "font": first.get("font", ""),
+                    "size": round(float(first.get("size", 9.0)), 2) if first.get("size") else 9.0,
+                    "color": _color_int_to_list(first.get("color", 0)) if isinstance(first.get("color"), int) else [0, 0, 0],
+                })
+                block_no += 1
+
+            for image_index, info in enumerate(page.get_image_info(xrefs=True)):
+                bbox = info.get("bbox")
+                images.append({
+                    "image_index": _page_image_base(doc, i) + image_index,
+                    "page_num": i,
+                    "bbox": [round(v, 2) for v in bbox] if bbox else None,
+                    "width": info.get("width"),
+                    "height": info.get("height"),
+                })
+
             pages.append({
                 "page_num": i,
-                "blocks": blocks
+                "blocks": blocks,
+                "images": images,
+                "width": round(page.rect.width, 2) if page.rect else None,
+                "height": round(page.rect.height, 2) if page.rect else None,
             })
         doc.close()
         return pages
     except Exception as e:
         logger.error("Error getting PDF content: %s", e)
         return []
+
+
+def _page_image_base(doc, page_index: int) -> int:
+    """Global image index of a page's first image (matches get_document_images)."""
+    total = 0
+    for i, p in enumerate(doc):
+        if i == page_index:
+            return total
+        for info in p.get_images(full=True):
+            try:
+                if doc.extract_image(info[0]).get("image"):
+                    total += 1
+            except Exception:
+                continue
+    return total
 
 def update_pdf_content(pdf_path: str, output_path: str, page_edits: list) -> bool:
     try:
@@ -166,10 +342,8 @@ def update_pdf_content(pdf_path: str, output_path: str, page_edits: list) -> boo
                 text = b_edit.get("text")
                 if bbox and text is not None:
                     rect = fitz.Rect(bbox)
-                    # White-out the block region
-                    page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
-                    # Insert the new text in the textbox (align left = 0, default 9pt helvetica font)
-                    page.insert_textbox(rect, text, fontsize=9.0, fontname="helv", color=(0.1, 0.1, 0.1), align=0)
+                    style = _pick_block_style(doc, page_num, bbox)
+                    _whiteout_and_write_text(page, rect, text, style)
 
         _save_pdf(doc, output_path)
         doc.close()
@@ -201,16 +375,12 @@ def find_replace_pdf(pdf_path: str, output_path: str, find_text: str, replace_te
                 page.add_redact_annot(rect)
             page.apply_redactions()
 
-            # Insert replacement text at each original position
+            # Insert replacement text at each original position using the
+            # original span's formatting (no highlight — preview shows that)
             for rect in targets:
-                fontsize = max(6.0, rect.height - 2)
-                page.insert_text(
-                    (rect.x0, rect.y1 - 2),
-                    replace_text,
-                    fontsize=fontsize,
-                    fontname="helv",
-                    color=(0.1, 0.1, 0.1),
-                )
+                style = _pick_block_style(doc, page.number, [rect.x0, rect.y0, rect.x1, rect.y1])
+                style["size"] = max(6.0, rect.height - 2)
+                _whiteout_and_write_text(page, rect, replace_text, style)
                 count += 1
 
         _save_pdf(doc, output_path)
@@ -277,14 +447,9 @@ def selective_replace_pdf(
                 page.apply_redactions()
 
                 for rect in targets:
-                    fontsize = max(6.0, rect.height - 2)
-                    page.insert_text(
-                        (rect.x0, rect.y1 - 2),
-                        replace_text,
-                        fontsize=fontsize,
-                        fontname="helv",
-                        color=(0.1, 0.1, 0.1),
-                    )
+                    style = _pick_block_style(doc, i, [rect.x0, rect.y0, rect.x1, rect.y1])
+                    style["size"] = max(6.0, rect.height - 2)
+                    _whiteout_and_write_text(page, rect, replace_text, style)
                     count += 1
                     changes.append({
                         "paragraph": f"Page {i + 1}",
@@ -310,14 +475,14 @@ def get_pdf_headers_footers(pdf_path: str) -> dict:
             # Extract header text (top 45 points)
             header_rect = fitz.Rect(0, 0, width, 45)
             h_text = page.get_text("text", clip=header_rect).strip()
-            if h_text:
-                headers.append({"section": i, "text": h_text})
+            if h_text and h_text not in headers:
+                headers.append(h_text)
 
             # Extract footer text (bottom 45 points)
             footer_rect = fitz.Rect(0, height - 45, width, height)
             f_text = page.get_text("text", clip=footer_rect).strip()
-            if f_text:
-                footers.append({"section": i, "text": f_text})
+            if f_text and f_text not in footers:
+                footers.append(f_text)
 
         doc.close()
         return {"headers": headers, "footers": footers}

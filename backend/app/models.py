@@ -28,6 +28,8 @@ class DocumentMetadata(BaseModel):
     name: str
     file_type: str  # "pdf" or "docx"
     storage_path: str
+    original_storage_path: Optional[str] = None  # uploaded original when an edited copy exists
+    has_edited_version: Optional[bool] = False
     owner_id: str
     upload_date: str  # YYYY-MM-DD format as requested
     edit_history: List[Dict[str, Any]] = []
@@ -45,10 +47,20 @@ class StyleUpdateRequest(BaseModel):
     image_replacements: Optional[List[Dict[str, Any]]] = None # List of {"target_index": int, "image_name": str} or similar
 
 class TextEditItem(BaseModel):
-    index: Optional[int] = None
-    page_num: Optional[int] = None
-    block_no: Optional[int] = None
+    # Which addressing space `text` belongs to. "paragraph" is the default so
+    # older clients that only send `index` keep working untouched.
+    kind: Optional[str] = Field(default="paragraph", description='"paragraph" or "table_cell"')
+    index: Optional[int] = None          # DOCX body paragraph index
+    page_num: Optional[int] = None       # PDF page
+    block_no: Optional[int] = None       # PDF text block on that page
     bbox: Optional[List[float]] = None
+    # DOCX table addressing. `table_index` is the position of the w:tbl in the
+    # body (the same `table_index` the /content block stream reports), and
+    # row/col are 0-based indices into `table.rows` / `row.cells` - i.e. the
+    # exact coordinates the editor renders, so reads and writes agree.
+    table_index: Optional[int] = None
+    row: Optional[int] = None
+    col: Optional[int] = None
     text: str
 
 class ContentUpdateRequest(BaseModel):
@@ -61,6 +73,35 @@ class FindReplaceRequest(BaseModel):
 
 class AICommandRequest(BaseModel):
     command: str
+
+class RewriteRequest(BaseModel):
+    # Instruction like "Fix grammar", "Make it formal", "Simplify this text"
+    instruction: Optional[str] = None
+    # Raw text to rewrite (takes precedence when provided)
+    text: Optional[str] = None
+    # DOCX paragraph index (used when text is not provided)
+    index: Optional[int] = None
+    # PDF page/block reference (used when text is not provided)
+    page_num: Optional[int] = None
+    block_no: Optional[int] = None
+
+class SummarizeRequest(BaseModel):
+    # "document" (whole file) or "page" (PDF page / DOCX paragraph)
+    scope: str = "document"
+    # Required when scope == "page".
+    #   PDF  -> 1-based page number
+    #   DOCX -> 0-based paragraph index
+    page: Optional[int] = None
+    # Explicit text to summarize; skips document parsing when provided.
+    text: Optional[str] = None
+    # Length hint: "brief" | "short" | "medium" | "detailed" | "one-paragraph"
+    length: Optional[str] = None
+
+class GenerateMCQRequest(BaseModel):
+    # How many questions to produce. Capped server-side by MCQ_MAX_QUESTIONS.
+    num_questions: int = 5
+    # Explicit passage to build questions from; skips document parsing.
+    text: Optional[str] = None
 
 class FindVariantsRequest(BaseModel):
     find_text: str
@@ -86,5 +127,6 @@ class PipelineUpdateRequest(BaseModel):
     pipeline_status: Optional[str] = None
     completion_percent: Optional[int] = None
     draft_edits: Optional[Dict[str, Any]] = None
+
 
 

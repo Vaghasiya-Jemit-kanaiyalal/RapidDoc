@@ -1,7 +1,7 @@
 import logging
 from pymongo import MongoClient, uri_parser
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
-from app.config import settings
+from RapidDoc.backend.app.config import settings
 
 logger = logging.getLogger(__name__)
 

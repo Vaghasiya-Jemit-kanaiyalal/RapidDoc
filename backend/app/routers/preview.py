@@ -4,18 +4,24 @@ import logging
 import docx
 from bson import ObjectId
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
-from app.database import db_conn
-from app.routers.auth import get_current_user
-from app.services.pdf_converter import convert_docx_bytes_to_pdf
-from app.services.storage import storage_service
+from RapidDoc.backend.app.database import db_conn
+from RapidDoc.backend.app.routers.auth import get_current_user
+from RapidDoc.backend.app.routers.documents import MAX_UPLOAD_BYTES
+from RapidDoc.backend.app.services.pdf_converter import convert_docx_bytes_to_pdf
+from RapidDoc.backend.app.services.storage import storage_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/docs", tags=["preview"])
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+# Must stay in step with documents.MAX_UPLOAD_BYTES and the 15MB the upload UI
+# advertises. When this was 10MB a 10-15MB document could be uploaded and saved
+# but then failed every single preview with a size error.
+MAX_FILE_SIZE = MAX_UPLOAD_BYTES
+MAX_FILE_SIZE_MB = MAX_FILE_SIZE // (1024 * 1024)
 
 
 def _read_stored_file(doc_id: str, owner_id: str) -> tuple[str, bytes]:
@@ -59,7 +65,7 @@ def _validate_docx_bytes(content: bytes, filename: str) -> None:
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds the maximum limit of 10MB.",
+            detail=f"File size exceeds the maximum limit of {MAX_FILE_SIZE_MB}MB.",
         )
 
     try:
@@ -101,7 +107,7 @@ async def preview_document(
 
     if file_type == "docx":
         try:
-            pdf_bytes = convert_docx_bytes_to_pdf(content)
+            pdf_bytes = await run_in_threadpool(convert_docx_bytes_to_pdf, content)
         except HTTPException:
             raise
         except Exception as exc:

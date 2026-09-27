@@ -7,9 +7,9 @@ from passlib.context import CryptContext
 from bson import ObjectId
 import logging
 
-from app.config import settings
-from app.database import db_conn
-from app.models import UserRegister, UserLogin, UserResponse, Token, TokenData
+from RapidDoc.backend.app.config import settings
+from RapidDoc.backend.app.database import db_conn
+from RapidDoc.backend.app.models import UserRegister, UserLogin, UserResponse, Token, TokenData
 
 logger = logging.getLogger(__name__)
 

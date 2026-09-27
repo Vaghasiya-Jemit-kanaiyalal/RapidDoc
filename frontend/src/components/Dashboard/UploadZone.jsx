@@ -1,15 +1,79 @@
-import React, { useState, useCallback } from 'react';
-import { Upload, AlertTriangle, FileText, CheckCircle2, Sparkles } from 'lucide-react';
+import React, { useState, useCallback, useRef } from 'react';
+import { Upload, AlertTriangle, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { safeFetchJson } from '../../utils/api';
+import { API_URL, getAuthHeaders, isAuthExpired } from '../../utils/api';
+import { UploadProgressSkeleton } from '../Editor/EditorSkeletons';
+
+/**
+ * Upload via XMLHttpRequest rather than fetch.
+ *
+ * fetch() still cannot report *upload* progress - only download - so a 12MB file
+ * on a slow line showed one opaque spinner with no idea how much had actually
+ * arrived. XHR's `upload.onprogress` gives real byte counts, which is what the
+ * progress bar is driven from.
+ *
+ * The response handling deliberately mirrors safeFetchJson(): parse JSON
+ * leniently, fall back to a readable detail message, and let a 401 trip the
+ * auth-expired event so the app logs the user out instead of hanging.
+ */
+const uploadWithProgress = ({ url, formData, onProgress, xhr, token }) =>
+  new Promise((resolve, reject) => {
+    xhr.open('POST', url, true);
+    xhr.withCredentials = false;
+
+    // An explicitly-passed token wins; otherwise fall back to the current one in
+    // storage, matching getAuthHeaders()'s "read it at call time" behaviour.
+    const authHeader = token ? { Authorization: `Bearer ${token}` } : getAuthHeaders();
+    if (authHeader.Authorization) {
+      xhr.setRequestHeader('Authorization', authHeader.Authorization);
+    }
+    // Content-Type is intentionally NOT set: the browser must add the
+    // multipart boundary itself, or the server cannot parse the form.
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress((e.loaded / e.total) * 100);
+      }
+    };
+
+    xhr.onload = () => {
+      let data = {};
+      const text = xhr.responseText;
+      if (text && text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          data = { detail: `Server response (${xhr.status}): Invalid or non-JSON response.` };
+        }
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data);
+        return;
+      }
+      // 401 -> let the app log out, but still reject so the spinner stops.
+      isAuthExpired({ status: xhr.status });
+      reject(new Error(data.detail || `Request failed with status ${xhr.status}`));
+    };
+
+    xhr.onerror = () => reject(new Error('Network error. Check your connection and try again.'));
+    xhr.ontimeout = () => reject(new Error('Upload timed out. Please try again.'));
+    xhr.onabort = () => reject(new Error('Upload cancelled.'));
+
+    xhr.send(formData);
+  });
 
 export const UploadZone = ({ token, onUploadSuccess }) => {
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
+  // -1 = indeterminate (server is still working after the bytes landed),
+  // 0..100 = real upload progress.
+  const [uploadProgress, setUploadProgress] = useState(-1);
+  const [uploadFileName, setUploadFileName] = useState('');
   const [error, setError] = useState('');
   const [splashData, setSplashData] = useState(null); // { type: 'pdf'|'docx', particles: [] }
+  const xhrRef = useRef(null);
 
-  const triggerSplash = (type) => {
+  const triggerSplash = useCallback((type) => {
     const count = 14;
     const particles = Array.from({ length: count }).map((_, i) => {
       const angle = (i / count) * Math.PI * 2 + (Math.random() * 0.4 - 0.2);
@@ -25,7 +89,7 @@ export const UploadZone = ({ token, onUploadSuccess }) => {
     });
     setSplashData({ type, particles });
     setTimeout(() => setSplashData(null), 1400);
-  };
+  }, []);
 
   const handleDrag = useCallback((e) => {
     e.preventDefault();
@@ -37,9 +101,9 @@ export const UploadZone = ({ token, onUploadSuccess }) => {
     }
   }, []);
 
-  const uploadFile = async (file) => {
+  const uploadFile = useCallback(async (file) => {
     setError('');
-    
+
     // File validation
     const ext = file.name.split('.').pop().toLowerCase();
     if (ext !== 'pdf' && ext !== 'docx') {
@@ -59,15 +123,23 @@ export const UploadZone = ({ token, onUploadSuccess }) => {
     formData.append('file', file);
 
     setUploading(true);
+    setUploadProgress(0);
+    setUploadFileName(file.name);
+    const xhr = new XMLHttpRequest();
+    xhrRef.current = xhr;
     try {
-      const data = await safeFetchJson('/api/documents/upload', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
+      const data = await uploadWithProgress({
+        url: `${API_URL}/documents/upload`,
+        formData,
+        xhr,
+        token,
+        onProgress: (pct) => setUploadProgress(pct),
       });
-      
+
+      // Bytes are on the server; it is now storing/analysing the file. Switch to
+      // the indeterminate state rather than sitting at a fake 100%.
+      setUploadProgress(-1);
+
       if (onUploadSuccess) {
         onUploadSuccess(data);
       }
@@ -75,18 +147,21 @@ export const UploadZone = ({ token, onUploadSuccess }) => {
       setError(err.message || 'Error uploading document.');
     } finally {
       setUploading(false);
+      setUploadProgress(-1);
+      setUploadFileName('');
+      xhrRef.current = null;
     }
-  };
+  }, [onUploadSuccess, token, triggerSplash]);
 
   const handleDrop = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       uploadFile(e.dataTransfer.files[0]);
     }
-  }, [token]);
+  }, [uploadFile]);
 
   const handleChange = (e) => {
     e.preventDefault();
@@ -170,7 +245,7 @@ export const UploadZone = ({ token, onUploadSuccess }) => {
           </div>
           
           <h3 className="font-extrabold text-lg text-ink mb-1.5">
-            {uploading ? 'Processing your document...' : 'Upload your document'}
+            {uploading ? 'Uploading your document...' : 'Upload your document'}
           </h3>
           <p className="text-sm text-secondary mb-4 max-w-sm">
             Drag and drop your file here, or <span className="text-brand-600 font-bold hover:underline">browse from device</span>
@@ -192,10 +267,31 @@ export const UploadZone = ({ token, onUploadSuccess }) => {
 
         {/* Uploading Overlay */}
         {uploading && (
-          <div className="absolute inset-0 bg-white/85 backdrop-blur-md rounded-3xl flex flex-col items-center justify-center z-20">
-            <div className="w-12 h-12 border-4 border-brand-600 border-t-transparent rounded-full animate-spin mb-3"></div>
-            <p className="text-sm font-bold text-ink">Extracting & analyzing document...</p>
-            <p className="text-xs text-secondary mt-1">Applying OCR & AI intent parser</p>
+          <div className="absolute inset-0 bg-white/85 backdrop-blur-md rounded-3xl flex flex-col items-center justify-center z-20 px-6">
+            {uploadProgress < 0 ? (
+              <>
+                <div className="w-12 h-12 border-4 border-brand-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+                <p className="text-sm font-bold text-ink">Extracting & analyzing document...</p>
+                <p className="text-xs text-secondary mt-1 text-center">
+                  Upload finished
+                  {uploadFileName ? ` — ${uploadFileName}` : ''}. This can take a moment on large files.
+                </p>
+              </>
+            ) : (
+              <>
+                <UploadProgressSkeleton
+                  progress={uploadProgress}
+                  label={uploadFileName ? `Uploading ${uploadFileName}` : 'Uploading'}
+                />
+                <button
+                  type="button"
+                  onClick={() => xhrRef.current?.abort()}
+                  className="mt-4 text-[11px] font-bold text-slate-500 hover:text-red-600 underline underline-offset-2 transition"
+                >
+                  Cancel upload
+                </button>
+              </>
+            )}
           </div>
         )}
       </motion.div>

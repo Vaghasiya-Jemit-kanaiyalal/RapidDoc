@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Type, ALargeSmall, AlignLeft, Image as ImageIcon, Save, ArrowLeft, Loader2, Sparkles, Sliders } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { API_URL, getAuthHeaders } from '../../utils/api';
 
 export const StylingPanel = ({ 
   document: doc, 
@@ -50,11 +51,9 @@ export const StylingPanel = ({
     }
 
     try {
-      const response = await fetch(`/api/documents/${doc.id}/style`, {
+      const response = await fetch(`${API_URL}/documents/${doc.id}/style`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
+        headers: getAuthHeaders(),
         body: formData
       });
 

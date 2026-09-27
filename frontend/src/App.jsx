@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, useInView, AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { safeFetchJson } from './utils/api';
+import { safeFetchJson, API_URL, getAuthHeaders, AUTH_EXPIRED_EVENT } from './utils/api';
 import { Login } from './components/Auth/Login';
 import { Register } from './components/Auth/Register';
 import { UploadZone } from './components/Dashboard/UploadZone';
 import { DocumentList } from './components/Dashboard/DocumentList';
+import { DocumentListSkeleton } from './components/Editor/EditorSkeletons';
 import { DocumentWorkspace } from './components/Editor/DocumentWorkspace';
 import { downloadDocument } from './utils/download';
 import logo from './assets/logo.png';
@@ -799,10 +800,8 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
 
   const fetchDocuments = async () => {
     try {
-      const data = await safeFetchJson('/api/documents', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      const data = await safeFetchJson(`${API_URL}/documents`, {
+        headers: getAuthHeaders()
       });
       setDocuments(data);
     } catch (err) {
@@ -834,14 +833,18 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
   const handleClearHistory = async () => {
     setClearingHistory(true);
     try {
-      await safeFetchJson('/api/documents/history', {
+      const res = await fetch(`${API_URL}/documents/history`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: getAuthHeaders()
       });
+      if (!res.ok) {
+        throw new Error(res.status === 404
+          ? 'Clear history is not available on the server. Restart the backend and try again.'
+          : 'Could not clear your document history on the server.');
+      }
       setDocuments([]);
     } catch (err) {
-      // If the endpoint doesn't exist, just clear locally
-      setDocuments([]);
+      setError(err.message || 'Error clearing document history.');
     } finally {
       setClearingHistory(false);
       setShowClearConfirm(false);
@@ -1088,14 +1091,7 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
             Your Documents
           </h3>
           {loading ? (
-            <div className="flex justify-center items-center py-16">
-              <div className="relative w-12 h-12">
-                <div className="absolute inset-0 border-4 border-brand-600 border-t-transparent rounded-full animate-spin"></div>
-                <div className="absolute inset-2 bg-brand-50 rounded-full flex items-center justify-center">
-                  <FileText className="w-4 h-4 text-brand-600" />
-                </div>
-              </div>
-            </div>
+            <DocumentListSkeleton rows={4} />
           ) : error ? (
             <div className="p-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-2xl font-medium flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1231,6 +1227,21 @@ const MainApp = () => {
   const { user, token, loading, logout } = useAuth();
   const [currentView, setCurrentView] = useState(() => parseRouteFromUrl().view);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const [sessionNotice, setSessionNotice] = useState('');
+
+  // When the backend rejects a request with 401 (expired/invalid token),
+  // clear the session and send the user back to the login view with a notice.
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      logout();
+      setSelectedDoc(null);
+      setSessionNotice('Your session has expired. Please sign in again to continue.');
+      setCurrentView('login');
+      window.history.replaceState({ view: 'login' }, '', '/#login');
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleAuthExpired);
+  }, [logout]);
 
   // Sync URL changes with current view (supports browser back/forward, direct URL typing)
   useEffect(() => {
@@ -1329,12 +1340,12 @@ const MainApp = () => {
 
   switch (currentView) {
     case 'login':
-      return <Login onToggleMode={handleNavigate} onSuccess={() => handleNavigate('dashboard')} />;
+      return <Login notice={sessionNotice} onNoticeDismiss={() => setSessionNotice('')} onToggleMode={handleNavigate} onSuccess={() => { setSessionNotice(''); handleNavigate('dashboard'); }} />;
     case 'register':
       return <Register onToggleMode={handleNavigate} onSuccess={() => handleNavigate('dashboard')} />;
     case 'dashboard':
       if (!token) {
-        return <Login onToggleMode={handleNavigate} onSuccess={() => handleNavigate('dashboard')} />;
+        return <Login notice={sessionNotice} onNoticeDismiss={() => setSessionNotice('')} onToggleMode={handleNavigate} onSuccess={() => { setSessionNotice(''); handleNavigate('dashboard'); }} />;
       }
       return (
         <Dashboard 

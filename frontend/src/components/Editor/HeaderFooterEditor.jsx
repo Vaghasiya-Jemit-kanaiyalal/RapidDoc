@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  X, Save, AlignLeft, AlignCenter, AlignRight, 
+import { API_URL, getAuthHeaders, isAuthExpired } from '../../utils/api';
+import {
+  X, Save, AlignLeft, AlignCenter, AlignRight,
   FileSignature, Loader2, Sparkles, Trash2, Calendar, FileText, Hash
 } from 'lucide-react';
 
@@ -13,8 +14,17 @@ export const HeaderFooterEditor = ({
   onClose,
   onSaveSuccess
 }) => {
-  const [headerText, setHeaderText] = useState(existingHeaders[0] || '');
-  const [footerText, setFooterText] = useState(existingFooters[0] || '');
+  // Some PDF header/footer responses contain {section, text} objects instead of
+  // plain strings — always coerce to a string so rendering never crashes.
+  const asText = (v) => {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'object') return String(v.text ?? '') || String(v.section ?? '');
+    return String(v);
+  };
+
+  const [headerText, setHeaderText] = useState(asText(existingHeaders[0]));
+  const [footerText, setFooterText] = useState(asText(existingFooters[0]));
   const [fontName, setFontName] = useState('Arial');
   const [fontSize, setFontSize] = useState(10);
   const [alignment, setAlignment] = useState('center'); // 'left', 'center', 'right'
@@ -28,10 +38,10 @@ export const HeaderFooterEditor = ({
 
   useEffect(() => {
     if (existingHeaders.length > 0 && !headerText) {
-      setHeaderText(existingHeaders[0]);
+      setHeaderText(asText(existingHeaders[0]));
     }
     if (existingFooters.length > 0 && !footerText) {
-      setFooterText(existingFooters[0]);
+      setFooterText(asText(existingFooters[0]));
     }
   }, [existingHeaders, existingFooters]);
 
@@ -64,15 +74,18 @@ export const HeaderFooterEditor = ({
         alignment: alignment
       };
 
-      const res = await fetch(`/api/documents/${doc.id}/header-footer`, {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/header-footer`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          ...getAuthHeaders(),
           'Content-Type': 'application/json'
         },
         body: JSON.stringify(payload)
       });
 
+      if (isAuthExpired(res)) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.detail || 'Failed to update header and footer');

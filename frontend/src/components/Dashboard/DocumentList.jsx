@@ -1,8 +1,17 @@
 import React from 'react';
 import { FileText, Download, Edit, Calendar, Play, CheckCircle2, Clock, Sparkles, ChevronRight, FileSpreadsheet } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { DocumentListSkeleton } from '../Editor/EditorSkeletons';
 
-export const DocumentList = ({ documents, onSelectDocument, onDownloadDocument }) => {
+export const DocumentList = ({ documents, loading = false, onSelectDocument, onDownloadDocument }) => {
+  // While the list is still loading, `documents` is an empty array - which is
+  // indistinguishable from "the user really has no documents". Showing the empty
+  // state there made a slow connection flash "No documents found" before the
+  // real rows appeared. Wait for the fetch instead.
+  if (loading) {
+    return <DocumentListSkeleton rows={4} />;
+  }
+
   if (!documents || documents.length === 0) {
     return (
       <div className="text-center py-16 bg-white/70 backdrop-blur-md border border-dashed border-borderline rounded-3xl p-8 shadow-card">

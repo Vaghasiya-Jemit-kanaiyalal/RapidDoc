@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Mail, Lock, Eye, EyeOff, LogIn, ArrowRight, Sparkles, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, LogIn, ArrowRight, Sparkles, CheckCircle2, ShieldCheck, X } from 'lucide-react';
 import { motion } from 'framer-motion';
 import logo from '../../assets/logo.png';
 
-export const Login = ({ onToggleMode, onSuccess }) => {
+export const Login = ({ onToggleMode, onSuccess, notice = '', onNoticeDismiss }) => {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -15,7 +15,7 @@ export const Login = ({ onToggleMode, onSuccess }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setValError('');
-    
+
     if (!email || !password) {
       setValError('Please fill in all fields.');
       return;
@@ -24,6 +24,7 @@ export const Login = ({ onToggleMode, onSuccess }) => {
     setLoading(true);
     try {
       await login(email, password);
+      if (onNoticeDismiss) onNoticeDismiss();
       if (onSuccess) onSuccess();
     } catch (err) {
       setValError(err.message || 'Login failed. Please check your credentials.');
@@ -82,6 +83,28 @@ export const Login = ({ onToggleMode, onSuccess }) => {
           <p className="text-xs sm:text-sm text-secondary max-w-xs mx-auto leading-relaxed mb-7">
             Sign in to access your documents and continue editing with AI.
           </p>
+
+          {/* Session expired notice */}
+          {notice && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-6 p-3.5 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-2xl font-semibold text-left flex items-start gap-2"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" />
+              <span className="flex-1">{notice}</span>
+              {onNoticeDismiss && (
+                <button
+                  type="button"
+                  onClick={onNoticeDismiss}
+                  className="text-amber-600 hover:text-amber-800 font-bold ml-1 cursor-pointer"
+                  aria-label="Dismiss"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </motion.div>
+          )}
 
           {/* Validation Error Banner */}
           {valError && (

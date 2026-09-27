@@ -1,9 +1,7 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import { safeFetchJson } from '../utils/api';
+import { safeFetchJson, API_URL } from '../utils/api';
 
 const AuthContext = createContext(null);
-
-const API_URL = '/api';
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);

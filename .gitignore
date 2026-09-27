@@ -4,6 +4,19 @@
 .env.*.local
 *.env
 
+# Credentials & keys - never commit these even by accident
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_ed25519
+credentials.json
+secrets.json
+service-account*.json
+gha-creds-*.json
+
 # Local Database & Storage Data
 mongodb_data/
 storage/

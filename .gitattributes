@@ -1,0 +1,16 @@
+# Normalise line endings in the repository so the same files check out
+# identically on Windows, macOS and Linux. Without this, every file appears
+# modified on a checkout with different core.autocrlf settings.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending translated.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.docx binary
+*.pptx binary
+*.woff  binary
+*.woff2 binary

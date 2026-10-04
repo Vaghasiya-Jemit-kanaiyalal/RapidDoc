@@ -1,0 +1,12 @@
+# Development-only dependencies.
+#
+# The backend test suite builds real .docx/.pdf files and reads the exported
+# results back with the same libraries a user's Word/PDF reader would use, so it
+# needs the real document stack rather than mocks - which the main requirements
+# already provide. Only the runner itself is extra.
+#
+#   run_dev.bat test          (or: pip install -r requirements-dev.txt)
+-r requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.23

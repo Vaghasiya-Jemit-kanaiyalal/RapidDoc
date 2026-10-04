@@ -1,8 +1,181 @@
 import fitz  # PyMuPDF
+import io
 import logging
+import math
+import os
 import re
 
+from . import header_footer as hf
+from .image_geometry import (
+    EMU_PER_PT,
+    ResizeError,
+    describe_change,
+    resolve_target_box,
+)
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# The canonical PDF image index space
+# ---------------------------------------------------------------------------
+#
+# Every PDF feature that refers to an image by number - the editor tiles, the
+# image endpoint, `images_count`, PPTX export and the replacement writer -
+# numbers them with `iter_pdf_image_slots` below. There used to be three
+# independent walks that agreed by luck:
+#
+#   * `_iter_pdf_images` (export_service)  - counted every *occurrence*
+#   * `_page_image_base` (here)            - counted every *occurrence*
+#   * the old replacement writer            - counted every *distinct xref*
+#
+# The third is the bug. A logo used on three pages is three occurrences but one
+# xref, so a PDF with any repeat had every image after it off by however many
+# repeats came first - the editor said "Image 4", the writer swapped whatever
+# xref happened to be fourth in its own list. Deduplicating was introduced to
+# avoid double-swapping the same stream, but it silently renumbered every
+# image in the document, which is far worse than replacing a logo twice.
+#
+# This one walk is occurrence-based and is what everything now uses.
+
+def iter_pdf_image_slots(doc):
+    """Yield every image occurrence in a PDF, in reading order.
+
+    Each entry is a dict::
+
+        {
+          "index": 0,          # the stable public id (occurrence-based)
+          "page_num": 0,       # 0-based page
+          "xref": 12,          # the image object this occurrence draws
+          "mime": "image/png",
+          "width": 800,        # stored pixel size
+          "height": 600,
+          "occurrence": 0,     # 0-based slot on this page (readable ones only)
+          "occurrences": 2,    # how many places draw this same xref
+        }
+
+    Occurrences of one xref are numbered separately but carry the same ``xref``.
+    Replacing any one of them replaces all of them, because a PDF stores the
+    pixels once and only the placement is per-page; that is a property of the
+    format, not a shortcut. ``occurrences`` lets the caller tell the user.
+
+    Unreadable xrefs are skipped entirely and consume no index, matching what the
+    editor renders. ``extract_image`` decodes the whole image, so results are
+    cached - a logo stamped on forty pages is decoded once, not forty times.
+    """
+    readable = {}
+    for page in doc:
+        for info in page.get_images(full=True):
+            xref = info[0]
+            if xref in readable:
+                continue
+            try:
+                extracted = doc.extract_image(xref)
+            except Exception:
+                continue
+            if extracted and extracted.get("image"):
+                readable[xref] = extracted
+
+    total_by_xref = {}
+    for page in doc:
+        for info in page.get_images(full=True):
+            xref = info[0]
+            if xref in readable:
+                total_by_xref[xref] = total_by_xref.get(xref, 0) + 1
+
+    index = 0
+    for page_num, page in enumerate(doc):
+        occurrence = 0
+        for info in page.get_images(full=True):
+            xref = info[0]
+            extracted = readable.get(xref)
+            if extracted is None:
+                continue
+            yield {
+                "index": index,
+                "page_num": page_num,
+                "xref": xref,
+                "mime": f"image/{extracted.get('ext', 'png')}",
+                "width": extracted.get("width"),
+                "height": extracted.get("height"),
+                "occurrence": occurrence,
+                "occurrences": total_by_xref.get(xref, 1),
+            }
+            occurrence += 1
+            index += 1
+
+
+def attach_pdf_image_placements(slots, doc):
+    """Give every slot the page rectangle it is drawn in.
+
+    ``page.get_images()`` reports images in resource order, which is not the
+    order a reader sees them in. Anything that has to talk about "the second
+    image on this page" needs geometry, and so does resizing an image (the new
+    size has to be applied to the placement, not the stored pixels).
+
+    Each xref can be stamped several times on one page, and ``get_image_info``
+    reports those bboxes in placement order - so occurrences of one xref consume
+    that list in turn, exactly as :func:`iter_pdf_image_slots` numbers them.
+    Sharing one cursor across both is what keeps "the 2nd image" meaning the same
+    thing here as in the editor.
+    """
+    bbox_by_page_xref = {}
+    for page_num, page in enumerate(doc):
+        try:
+            infos = page.get_image_info(xrefs=True)
+        except Exception:
+            infos = []
+        per_xref = {}
+        for info in infos:
+            per_xref.setdefault(info.get("xref"), []).append(
+                list(info["bbox"]) if info.get("bbox") else None
+            )
+        bbox_by_page_xref[page_num] = per_xref
+
+    cursors = {}
+    for slot in slots:
+        candidates = bbox_by_page_xref.get(slot["page_num"], {}).get(slot["xref"], [])
+        seen = cursors.get((slot["page_num"], slot["xref"]), 0)
+        slot["bbox"] = candidates[seen] if seen < len(candidates) else None
+        cursors[(slot["page_num"], slot["xref"])] = seen + 1
+    return slots
+
+
+def get_pdf_image_slots(pdf_path: str) -> list:
+    """:func:`iter_pdf_image_slots` as a list, for callers holding a path.
+
+    Includes the drawn rectangle (``bbox``) for each slot, because callers that
+    address images by position ("the 2nd one on page 3") or resize them need
+    geometry, and re-deriving it per caller is how two views end up numbering the
+    same page differently.
+    """
+    try:
+        doc = _open_pdf(pdf_path)
+    except Exception as exc:
+        logger.error("Error opening PDF for image slots: %s", exc)
+        return []
+    try:
+        return attach_pdf_image_placements(list(iter_pdf_image_slots(doc)), doc)
+    except Exception as exc:
+        logger.error("Error listing PDF image slots: %s", exc)
+        return []
+    finally:
+        doc.close()
+
+
+def pdf_image_descriptors(pdf_path: str) -> list:
+    """JSON-safe image list for the editor, on the canonical index space."""
+    return [
+        {
+            "index": s["index"],
+            "mime": s["mime"],
+            "width": s["width"],
+            "height": s["height"],
+            "page_num": s["page_num"],
+            "occurrences": s["occurrences"],
+        }
+        for s in get_pdf_image_slots(pdf_path)
+    ]
 
 def _open_pdf(pdf_path: str):
     """Open a PDF from bytes to avoid PyMuPDF failures with non-ASCII/emoji paths."""
@@ -17,60 +190,54 @@ def _save_pdf(doc, output_path: str):
         fh.write(pdf_bytes)
 
 def get_pdf_images_count(pdf_path: str) -> int:
+    """Number of images in a PDF, on the canonical index space.
+
+    Was counting distinct xrefs, which disagreed with the editor the moment a
+    document repeated a logo - "6 images" in the sidebar next to 9 tiles.
+    """
     try:
         doc = _open_pdf(pdf_path)
-        xrefs = set()
-        for page in doc:
-            for img_info in page.get_images(full=True):
-                xrefs.add(img_info[0])
-        doc.close()
-        return len(xrefs)
+    except Exception as exc:
+        logger.error("Error counting images in PDF: %s", exc)
+        return 0
+    try:
+        return sum(1 for _ in iter_pdf_image_slots(doc))
     except Exception as e:
         logger.error("Error counting images in PDF: %s", e)
         return 0
-
-def _page_zone_text(page, rect) -> str:
-    try:
-        return page.get_text("text", clip=rect).strip()
-    except Exception:
-        return ""
-
+    finally:
+        doc.close()
 
 def apply_pdf_styling(
     pdf_path: str,
     output_path: str,
     font_name: str = None,  # For new additions like headers/footers
-    font_size: float = None,  # For new additions like headers/footers
+    font_size: float = None,
     header_text: str = None,
     footer_text: str = None,
     target_header_text: str = None,
     target_footer_text: str = None,
     image_replacements: list = None,  # List of dicts: [{"target_index": int, "image_bytes": bytes}]
-    alignment: str = None
+    alignment: str = None,
+    header_text_odd: str = None,
+    header_text_even: str = None,
+    header_text_first: str = None,
+    footer_text_odd: str = None,
+    footer_text_even: str = None,
+    footer_text_first: str = None,
+    header_alignment: str = None,
+    footer_alignment: str = None,
+    doc_title: str = None,
+    doc_filename: str = None,
 ) -> bool:
     try:
         doc = _open_pdf(pdf_path)
 
         # 1. Image replacement
+        #    Delegates to the shared writer so /style and /replace-image cannot
+        #    drift apart in how they number or match pictures.
         if image_replacements:
-            # Map unique image xrefs in order of appearance
-            xrefs = []
-            for page in doc:
-                for img_info in page.get_images(full=True):
-                    xref = img_info[0]
-                    if xref not in xrefs:
-                        xrefs.append(xref)
-
-            for rep in image_replacements:
-                idx = rep.get("target_index")
-                img_bytes = rep.get("image_bytes")
-                if idx is not None and img_bytes and 0 <= idx < len(xrefs):
-                    target_xref = xrefs[idx]
-                    try:
-                        doc.replace_image(target_xref, stream=img_bytes)
-                        logger.info("Successfully replaced PDF image at xref %d (index %d)", target_xref, idx)
-                    except Exception as img_err:
-                        logger.error("Failed to replace PDF image at index %d: %s", idx, img_err)
+            _apply_pdf_image_replacements(doc, image_replacements)
 
         # 2. Add Header & Footer overlays
         # Map frontend font choices to TextWriter base-14 PDF font codes
@@ -85,54 +252,36 @@ def apply_pdf_styling(
                 pdf_font = "helv"
 
         f_size = font_size if font_size else 10.0
-        align_map = {
-            "left": fitz.TEXT_ALIGN_LEFT,
-            "center": fitz.TEXT_ALIGN_CENTER,
-            "right": fitz.TEXT_ALIGN_RIGHT,
-        }
-        align = align_map.get((alignment or "center").lower(), fitz.TEXT_ALIGN_CENTER)
 
-        for page in doc:
-            # Page dimensions
-            width = page.rect.width
-            height = page.rect.height
+        header_spec = hf.spec_from_legacy(
+            header_text=header_text,
+            header_odd=header_text_odd,
+            header_even=header_text_even,
+            header_first=header_text_first,
+        )["header"]
+        footer_spec = hf.spec_from_legacy(
+            footer_text=footer_text,
+            footer_odd=footer_text_odd,
+            footer_even=footer_text_even,
+            footer_first=footer_text_first,
+        )["footer"]
 
-            # Apply Header (only when targeted/current header matches)
-            if header_text is not None:
-                header_rect = fitz.Rect(0, 0, width, 45)
-                current_header = _page_zone_text(page, header_rect)
-                if target_header_text is None or current_header == target_header_text:
-                    # White-out original header area (top 45 points)
-                    page.draw_rect(header_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
-                    # Write new header centered and auto-wrapped within the top band
-                    text_rect = fitz.Rect(10, 5, width - 10, 45)
-                    page.insert_textbox(
-                        text_rect,
-                        header_text,
-                        fontsize=f_size,
-                        fontname=pdf_font,
-                        color=(0.2, 0.2, 0.2),
-                        align=align,
-                        overlay=True
-                    )
+        # "Apply to matching text only" narrows the change to pages whose current
+        # band text matches what the editor was showing.
+        header_spec = _restrict_spec(header_spec, target_header_text, "header", doc)
+        footer_spec = _restrict_spec(footer_spec, target_footer_text, "footer", doc)
 
-            # Apply Footer (only when targeted/current footer matches)
-            if footer_text is not None:
-                footer_rect = fitz.Rect(0, height - 45, width, height)
-                current_footer = _page_zone_text(page, footer_rect)
-                if target_footer_text is None or current_footer == target_footer_text:
-                    # White-out original footer area (bottom 45 points)
-                    page.draw_rect(footer_rect, color=(1, 1, 1), fill=(1, 1, 1), overlay=True)
-                    text_rect = fitz.Rect(10, height - 45, width - 10, height - 5)
-                    page.insert_textbox(
-                        text_rect,
-                        footer_text,
-                        fontsize=f_size,
-                        fontname=pdf_font,
-                        color=(0.2, 0.2, 0.2),
-                        align=align,
-                        overlay=True
-                    )
+        hf.apply_pdf_headers_footers(
+            doc,
+            {"header": header_spec, "footer": footer_spec},
+            fontname=pdf_font,
+            fontsize=f_size,
+            header_align=header_alignment or alignment or "center",
+            footer_align=footer_alignment or alignment or "center",
+            title=doc_title or _pdf_title(doc),
+            filename=doc_filename or os.path.basename(pdf_path or ""),
+            targets={"header": target_header_text, "footer": target_footer_text},
+        )
 
         _save_pdf(doc, output_path)
         doc.close()
@@ -140,6 +289,35 @@ def apply_pdf_styling(
     except Exception as e:
         logger.error("Error applying PDF styling: %s", e)
         return False
+
+
+def _restrict_spec(spec, target_text, which, doc):
+    """Keep a header/footer spec only for pages whose current text matches.
+
+    Returning a per-page variant map is what lets the caller apply the change to
+    one repeated header without touching the rest of the document.
+    """
+    if target_text is None:
+        return spec
+
+    wanted_pages = set()
+    for index, page in enumerate(doc):
+        band = hf.band_rect(page, which)
+        if page.get_text("text", clip=band).strip() == target_text.strip():
+            wanted_pages.add(index + 1)
+
+    if not wanted_pages:
+        return {"all": None, "odd": None, "even": None, "first": None}
+
+    restricted = {"all": None, "odd": None, "even": None, "first": None}
+    last = max(wanted_pages)
+    for page_number in range(1, last + 1):
+        if page_number in wanted_pages:
+            restricted["odd" if page_number % 2 else "even"] = spec.get("all")
+        else:
+            restricted["odd" if page_number % 2 else "even"] = None
+    restricted["first"] = spec.get("first") if 1 in wanted_pages else None
+    return restricted
 
 def _pick_pdf_font(span_font: str) -> str:
     """Map a detected span font name to a PyMuPDF base-14 font code."""
@@ -258,8 +436,28 @@ def _join_spans(spans: list) -> str:
 
 
 def get_pdf_content(pdf_path: str) -> list:
+    """Pages of text blocks plus per-page image placements.
+
+    The image ``image_index`` values come from :func:`iter_pdf_image_slots`, the
+    same numbering the image endpoint and the replacement writer use. This used
+    to number them from ``page.get_image_info()`` while the image endpoint
+    numbered from ``page.get_images()`` - PyMuPDF returns those in different
+    orders (placement order vs. resource order), so on a page holding two
+    different pictures the editor could label one tile with the other's index and
+    render the wrong image. The bounding boxes are still taken from
+    ``get_image_info`` (it is the only source of placement geometry) but they are
+    paired onto slots by xref and occurrence, so the index always comes from the
+    canonical walk.
+    """
     try:
         doc = _open_pdf(pdf_path)
+
+        slots = list(iter_pdf_image_slots(doc))
+        attach_pdf_image_placements(slots, doc)
+        slots_by_page = {}
+        for slot in slots:
+            slots_by_page.setdefault(slot["page_num"], []).append(slot)
+
         pages = []
         for i, page in enumerate(doc):
             blocks = []
@@ -288,14 +486,15 @@ def get_pdf_content(pdf_path: str) -> list:
                 })
                 block_no += 1
 
-            for image_index, info in enumerate(page.get_image_info(xrefs=True)):
-                bbox = info.get("bbox")
+            for slot in slots_by_page.get(i, []):
                 images.append({
-                    "image_index": _page_image_base(doc, i) + image_index,
+                    "image_index": slot["index"],
                     "page_num": i,
-                    "bbox": [round(v, 2) for v in bbox] if bbox else None,
-                    "width": info.get("width"),
-                    "height": info.get("height"),
+                    "xref": slot["xref"],
+                    "bbox": slot["bbox"],
+                    "width": slot.get("width"),
+                    "height": slot.get("height"),
+                    "occurrences": slot.get("occurrences", 1),
                 })
 
             pages.append({
@@ -312,19 +511,534 @@ def get_pdf_content(pdf_path: str) -> list:
         return []
 
 
-def _page_image_base(doc, page_index: int) -> int:
-    """Global image index of a page's first image (matches get_document_images)."""
-    total = 0
-    for i, p in enumerate(doc):
-        if i == page_index:
-            return total
-        for info in p.get_images(full=True):
+def _pad_to_aspect(img_bytes: bytes, target_ratio: float | None):
+    """Letterbox `img_bytes` onto a canvas of `target_ratio`.
+
+    PyMuPDF's ``replace_image`` swaps the pixel stream but keeps the original
+    placement rectangle, so a 16:9 upload dropped into a 1:1 slot comes out
+    squashed. The content stream's transformation matrix cannot be rewritten
+    through the API, so instead the *pixels* are padded to the old box's aspect
+    ratio; the rectangle then maps 1:1 onto a correctly-proportioned picture.
+
+    Returns ``(padded_bytes, was_padded)``. Never raises - if padding fails the
+    original bytes are returned and the caller proceeds unletterboxed.
+    """
+    if not target_ratio or target_ratio <= 0:
+        return img_bytes, False
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(img_bytes)) as src:
+            src.load()
+            width, height = src.size
+            if not width or not height:
+                return img_bytes, False
+            current_ratio = width / height
+            if abs(current_ratio - target_ratio) <= 0.01:
+                return img_bytes, False
+
+            if current_ratio > target_ratio:
+                new_w, new_h = width, max(1, int(round(width / target_ratio)))
+            else:
+                new_w, new_h = max(1, int(round(height * target_ratio))), height
+
+            canvas = Image.new("RGB", (new_w, new_h), (255, 255, 255))
+            if src.mode in ("RGBA", "LA", "P"):
+                src = src.convert("RGBA")
+                canvas = Image.new("RGBA", (new_w, new_h), (255, 255, 255, 255))
+            canvas.paste(src, ((new_w - width) // 2, (new_h - height) // 2))
+
+            buffer = io.BytesIO()
+            canvas.convert("RGB").save(buffer, format="PNG")
+            return buffer.getvalue(), True
+    except Exception as exc:
+        logger.warning("Aspect-ratio padding skipped: %s", exc)
+        return img_bytes, False
+
+
+def _rewrite_pdf_image_xref(doc, xref: int, new_bytes: bytes):
+    """Rewrite an image XObject's pixels in place. Returns ``(ok, reason)``.
+
+    Why not ``Page.replace_image``
+    ------------------------------
+    ``Page.replace_image`` is the obvious call and it does rewrite the object -
+    but it also leaves a *second* copy of the XObject entry in that page's
+    resource dictionary. PyMuPDF's own ``page.get_images()`` then reports the
+    image twice, while the content stream still draws it once.
+
+    That duplicate is not cosmetic here: every image index in this module is an
+    occurrence count, so a stray extra entry shifts every subsequent image by
+    one. Replacing "Image 5" would quietly become "Image 6" on the next save.
+    Rewriting the stream touches only the pixel data and provably leaves the
+    page resources and content stream byte-identical, so the index space cannot
+    move.
+
+    Returns ``(False, reason)`` for the image flavours this cannot represent
+    faithfully - palette (``/Indexed``) images, stencils, odd bit depths - and
+    the caller falls back to ``Page.replace_image`` for those.
+    """
+    # Colour spaces whose samples are not plain component bytes.
+    exotic = ("Indexed", "Separation", "DeviceN", "Pattern")
+
+    try:
+        if (doc.xref_get_key(xref, "ImageMask")[1] or "false").strip().lower() == "true":
+            return False, "it is a stencil mask, not a picture"
+
+        bpc = (doc.xref_get_key(xref, "BitsPerComponent")[1] or "").strip()
+        if bpc and bpc != "8":
+            return False, f"it uses a {bpc}-bit colour depth"
+
+        cs_kind, cs_value = doc.xref_get_key(xref, "ColorSpace")
+        cs = (cs_value or "").strip()
+        if cs_kind == "xref":
+            resolved = doc.xref_object(int(cs.split()[0])).strip()
+            family = re.match(r"\[\s*/(\w+)", resolved)
+            family = family.group(1) if family else resolved.lstrip("/").split()[0]
+        else:
+            family = cs.lstrip("/").split()[0] if cs else ""
+        if family in exotic:
+            return False, f"it uses a {family} colour space"
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(new_bytes)) as im:
+            im.load()
+            rgb = im.convert("RGB")
+            raw = rgb.tobytes()
+            width, height = rgb.size
+
+        # An inherited soft mask would be composited onto an opaque replacement
+        # and punch holes through it, so it is dropped rather than honoured.
+        if (doc.xref_get_key(xref, "SMask")[1] or "null").strip() != "null":
+            doc.xref_set_key(xref, "SMask", "null")
+
+        doc.xref_set_key(xref, "ColorSpace", "/DeviceRGB")
+        doc.xref_set_key(xref, "BitsPerComponent", "8")
+        doc.xref_set_key(xref, "Width", str(width))
+        doc.xref_set_key(xref, "Height", str(height))
+        doc.xref_set_key(xref, "Filter", "/FlateDecode")
+        doc.xref_set_key(xref, "DecodeParms", "null")
+        doc.update_stream(xref, raw, new=0, compress=1)
+        return True, ""
+    except Exception as exc:
+        logger.warning("In-place PDF image rewrite failed for xref %s: %s", xref, exc)
+        return False, str(exc)
+
+
+def _apply_pdf_image_replacements(doc, replacements: list, size_mode: str = "fit") -> list:
+    """Swap image streams in an open PDF, on the canonical index space.
+
+    ``replacements`` is ``[{"target_index": int, "image_bytes": bytes}]`` resolved
+    against :func:`iter_pdf_image_slots`. The old implementation built its own
+    ``xref`` list with ``if xref not in xrefs``, i.e. it numbered distinct
+    streams while the editor numbered occurrences, so any repeated image shifted
+    every subsequent target by one.
+
+    ``page.replace_image`` replaces the stream behind an xref everywhere it is
+    drawn. That is correct for "replace the logo" and unavoidable for a single
+    occurrence - a PDF stores the pixels once - so ``occurrences`` is reported
+    back so the caller can say so plainly.
+    """
+    if not replacements:
+        return []
+
+    slots = {s["index"]: s for s in iter_pdf_image_slots(doc)}
+    reports = []
+
+    for rep in replacements:
+        idx = rep.get("target_index")
+        img_bytes = rep.get("image_bytes")
+        report = {"index": idx, "replaced": False, "occurrences": 0}
+
+        if idx is None or not img_bytes:
+            report["error"] = "No image data was provided."
+            reports.append(report)
+            continue
+
+        slot = slots.get(idx)
+        if slot is None:
+            report["error"] = (
+                f"Image {idx} does not exist in this document "
+                f"(it has {len(slots)} image{'s' if len(slots) != 1 else ''})."
+            )
+            reports.append(report)
+            continue
+
+        payload = img_bytes
+        padded = False
+        page = doc[slot["page_num"]]
+        if size_mode == "fit":
+            target_ratio = None
             try:
-                if doc.extract_image(info[0]).get("image"):
-                    total += 1
+                for rect in page.get_image_rects(slot["xref"]):
+                    if rect.width > 0 and rect.height > 0:
+                        target_ratio = rect.width / rect.height
+                        break
             except Exception:
+                target_ratio = None
+            payload, padded = _pad_to_aspect(img_bytes, target_ratio)
+
+        try:
+            # Preferred path: rewrite the pixel stream in place. Leaves the page
+            # resources and content stream untouched, so no image can shift
+            # position in the index space afterwards.
+            ok, reason = _rewrite_pdf_image_xref(doc, slot["xref"], payload)
+            if not ok:
+                # Fallback for image flavours an in-place rewrite cannot express.
+                # NOTE: `replace_image` is a *Page* method in PyMuPDF, not a
+                # Document one. Calling it on the document raised AttributeError,
+                # so PDF image replacement silently did nothing at all - every
+                # attempt was swallowed by the broad `except` and logged while
+                # the endpoint still reported success.
+                #
+                # It also leaves a duplicate XObject entry in that page's
+                # resources, which shifts later image indices by one, so the
+                # report says so and the caller is expected to re-read content.
+                doc[slot["page_num"]].replace_image(slot["xref"], stream=payload)
+                report["fallback"] = reason
+                report["resource_warning"] = True
+        except Exception as exc:
+            report["error"] = f"Could not write the new image into the PDF: {exc}"
+            reports.append(report)
+            continue
+
+        report["replaced"] = True
+        report["occurrences"] = slot.get("occurrences", 1)
+        report["page_num"] = slot["page_num"]
+        report["padded"] = padded
+        reports.append(report)
+        logger.info(
+            "Replaced PDF image %d on page %d (xref %d, %d occurrence(s), padded=%s)",
+            idx, slot["page_num"], slot["xref"], slot.get("occurrences", 1), padded,
+        )
+
+    return reports
+
+
+def _fmt_pdf_number(value: float) -> bytes:
+    """A matrix component, without exponent notation or trailing noise.
+
+    PDF numbers are plain decimals; ``1e-05`` is not a valid operand for every
+    consumer, and a full float repr would churn every byte of the stream.
+    """
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return (text if text not in ("", "-", "-0") else "0").encode("ascii")
+
+
+# "... 200 0 0 100 50 682 cm" - the matrix that scales the unit square an image
+# is drawn into, which is the only place a PDF records how big a picture prints.
+_PDF_CM_RE = re.compile(
+    rb"(?P<pre>[-\d\.\s]{6,})cm\b",
+)
+
+_PDF_DO_RE = re.compile(rb"/(?P<name>[A-Za-z0-9_.#+\-]+)\s+Do\b")
+
+
+def _pdf_title(doc) -> str:
+    """The document's own title, for the ``{TITLE}`` header/footer field.
+
+    PyMuPDF hands back ``None`` for the common case of a file that never had its
+    metadata filled in, so an empty string is the honest answer rather than the
+    string "None".
+    """
+    try:
+        return (doc.metadata or {}).get("title") or ""
+    except Exception:
+        return ""
+
+
+def _resource_names_for(doc, page) -> dict:
+    """``{resource name: xref}`` for the image XObjects on ``page``."""
+    names = {}
+    try:
+        listed = page.get_images(full=True)
+    except Exception:
+        return names
+    for entry in listed:
+        # (xref, smask, width, height, bpc, colorspace, alt_colorspace, name, ...)
+        if len(entry) > 7 and entry[7]:
+            names[str(entry[7])] = entry[0]
+    return names
+
+
+def _scaled_matrix(raw: bytes, new_w: float, new_h: float, anchor: str):
+    """Rewrite one ``cm`` operand list to a new size.
+
+    Returns ``(new_bytes, error)``. For an unrotated picture the matrix is
+    ``a 0 0 d e f`` where ``a``/``d`` are the printed width and height in points
+    and ``e``/``f`` the origin, so only four of the six numbers change.
+
+    Only the numbers are replaced. The whitespace around them is part of the
+    stream's structure - dropping the newline after ``q`` yields ``q288`` and the
+    page stops parsing.
+    """
+    lead = raw[: len(raw) - len(raw.lstrip())]
+    trail = raw[len(raw.rstrip()):]
+    numbers = raw.split()
+    if len(numbers) != 6:
+        return None, "the image's transform is not a simple six-number matrix"
+    try:
+        a, b, c, d, e, f = (float(n) for n in numbers)
+    except ValueError:
+        return None, "the image's transform contains unreadable numbers"
+
+    if abs(b) > 1e-6 or abs(c) > 1e-6:
+        # Rotated or skewed. Scaling that correctly means recomposing the
+        # matrix rather than replacing components, which is a different (and
+        # much larger) piece of work; refuse rather than write a wrong one.
+        return None, "this image is rotated, which cannot be resized safely yet"
+
+    if a == 0 or d == 0:
+        return None, "this image has a zero-size transform"
+
+    new_a = math.copysign(new_w, a)
+    new_d = math.copysign(new_h, d)
+
+    # An image XObject paints into the unit square with its first image row at
+    # y=1, so (e, f) is the *bottom* left corner of what the reader sees. Holding
+    # e and f unchanged therefore pins the bottom edge and makes a shorter image
+    # grow upwards, which is the opposite of what "keep the top left" means.
+    if anchor == "center":
+        # Keep the middle where it was instead of the top-left corner.
+        e += (a - new_a) / 2.0
+        f += (d - new_d) / 2.0
+    else:
+        # top_left: slide the bottom edge down so the top edge stays put.
+        f += (d - new_d)
+
+    body = b" ".join(_fmt_pdf_number(v) for v in (new_a, b, c, new_d, e, f))
+    return lead + body + (trail or b" "), None
+
+
+def _resize_pdf_placements(doc, page_num: int, xref: int, new_w: float, new_h: float,
+                           anchor: str = "top_left"):
+    """Rewrite the drawing matrix of every placement of ``xref`` on a page.
+
+    Returns ``(placements_changed, error)``. PyMuPDF exposes no API for the
+    transformation matrix, so the page's content streams are edited directly -
+    the same low-level approach already used to swap the pixel streams, and for
+    the same reason: the alternatives (redact-and-reinsert) destroy whatever the
+    image overlaps.
+    """
+    page = doc[page_num]
+    names = [name for name, value in _resource_names_for(doc, page).items() if value == xref]
+    if not names:
+        return 0, "this image is not named in the page resources"
+
+    try:
+        content_xrefs = list(page.get_contents())
+    except Exception:
+        content_xrefs = []
+
+    if not content_xrefs:
+        return 0, "this page has no content stream to resize"
+
+    wanted = {name.encode("ascii") for name in names}
+    changed = 0
+    first_error = None
+
+    for cxref in content_xrefs:
+        try:
+            stream = doc.xref_stream(cxref)
+        except Exception:
+            continue
+        if not stream:
+            continue
+
+        pieces = []
+        cursor = 0
+        stream_changed = False
+
+        for match in _PDF_DO_RE.finditer(stream):
+            if match.group("name") not in wanted:
                 continue
-    return total
+            # The matrix immediately governing this Do, per the PDF drawing
+            # model: a Do paints the unit square as transformed by the current
+            # graphics state, which producers set with a cm just above it.
+            cm = None
+            for cm_match in _PDF_CM_RE.finditer(stream, 0, match.start()):
+                cm = cm_match
+            if cm is None:
+                first_error = first_error or (
+                    "this image's size is set in a way that cannot be rewritten safely"
+                )
+                continue
+
+            replacement, error = _scaled_matrix(
+                cm.group("pre"), new_w, new_h, anchor
+            )
+            if error:
+                first_error = first_error or error
+                continue
+
+            pieces.append(stream[cursor:cm.start("pre")])
+            pieces.append(replacement)
+            cursor = cm.end("pre")
+            stream_changed = True
+            changed += 1
+
+        if stream_changed:
+            pieces.append(stream[cursor:])
+            try:
+                doc.update_stream(cxref, b"".join(pieces))
+            except Exception as exc:
+                logger.error("Failed to write resized content stream %d: %s", cxref, exc)
+                changed = max(0, changed - 1)
+                first_error = first_error or f"could not save the resized page: {exc}"
+
+    if not changed:
+        return 0, first_error or "this image could not be resized"
+    return changed, None
+
+
+def _apply_pdf_image_resizes(doc, resizes: list) -> list:
+    """Apply resize requests to an open PDF, on the canonical index space."""
+    slots = {s["index"]: s for s in iter_pdf_image_slots(doc)}
+    # A resize is measured against what is currently printed, so the placement
+    # rectangles are required - iter_pdf_image_slots does not attach them.
+    attach_pdf_image_placements(list(slots.values()), doc)
+    reports = []
+
+    for req in resizes:
+        idx = req.get("target_index")
+        report = {"index": idx, "resized": False, "placements": 0}
+
+        if idx is None:
+            report["error"] = "No image was identified to resize."
+            reports.append(report)
+            continue
+
+        slot = slots.get(idx)
+        if slot is None:
+            report["error"] = (
+                f"Image {idx} does not exist in this document "
+                f"(it has {len(slots)} image{'s' if len(slots) != 1 else ''})."
+            )
+            reports.append(report)
+            continue
+
+        anchor = req.get("anchor", "top_left")
+        current_w = slot.get("bbox")
+        try:
+            old_w_emu = int(round((current_w[2] - current_w[0]) * EMU_PER_PT)) if current_w else 0
+            old_h_emu = int(round((current_w[3] - current_w[1]) * EMU_PER_PT)) if current_w else 0
+            new_w_emu, new_h_emu = resolve_target_box(
+                old_w_emu, old_h_emu,
+                width=req.get("width"),
+                height=req.get("height"),
+                unit=req.get("unit", "px"),
+                keep_aspect=req.get("keep_aspect", True),
+            )
+        except ResizeError as exc:
+            report["error"] = str(exc)
+            reports.append(report)
+            continue
+
+        if old_w_emu <= 0 or old_h_emu <= 0:
+            report["error"] = (
+                "This image has no readable position on the page, so it cannot "
+                "be resized. Replace it instead."
+            )
+            reports.append(report)
+            continue
+
+        new_w_pt = new_w_emu / EMU_PER_PT
+        new_h_pt = new_h_emu / EMU_PER_PT
+
+        changed, error = _resize_pdf_placements(
+            doc, slot["page_num"], slot["xref"], new_w_pt, new_h_pt, anchor
+        )
+        if error and not changed:
+            report["error"] = error
+            reports.append(report)
+            continue
+
+        report["resized"] = True
+        report["placements"] = changed
+        report["change"] = describe_change(old_w_emu, old_h_emu, new_w_emu, new_h_emu)
+        reports.append(report)
+
+    return reports
+
+
+def resize_pdf_images(pdf_path: str, output_path: str, resizes: list) -> dict:
+    """Resize images in a PDF, writing the result to ``output_path``.
+
+    Same request shape and ``{"ok", "resized", "reports", "error"}`` contract as
+    :func:`replace_pdf_images`.
+    """
+    if not resizes:
+        return {"ok": False, "resized": 0, "reports": [], "error": "No image was identified to resize."}
+
+    try:
+        doc = _open_pdf(pdf_path)
+    except Exception as exc:
+        return {"ok": False, "resized": 0, "reports": [], "error": f"Could not open the PDF: {exc}"}
+
+    try:
+        reports = _apply_pdf_image_resizes(doc, resizes)
+    except Exception as exc:
+        logger.error("Error resizing PDF images: %s", exc)
+        return {"ok": False, "resized": 0, "reports": [], "error": str(exc)}
+
+    resized = sum(1 for r in reports if r.get("resized"))
+
+    if resized:
+        try:
+            _save_pdf(doc, output_path)
+        except Exception as exc:
+            logger.error("Error saving PDF after image resize: %s", exc)
+            return {"ok": False, "resized": resized, "reports": reports, "error": str(exc)}
+    else:
+        doc.close()
+
+    if not resized:
+        first_error = next((r.get("error") for r in reports if r.get("error")), None)
+        return {
+            "ok": False,
+            "resized": 0,
+            "reports": reports,
+            "error": first_error or "No images were resized.",
+        }
+
+    doc.close()
+    return {"ok": True, "resized": resized, "reports": reports, "error": None}
+
+
+def replace_pdf_images(
+    pdf_path: str,
+    output_path: str,
+    replacements: list,
+    size_mode: str = "fit",
+) -> dict:
+    """Replace images in a PDF and write the result to ``output_path``.
+
+    Returns ``{"ok": bool, "replaced": n, "reports": [...], "error": str|None}``.
+    Never raises: callers turn ``error`` into an HTTP message.
+    """
+    try:
+        doc = _open_pdf(pdf_path)
+    except Exception as exc:
+        return {"ok": False, "replaced": 0, "reports": [], "error": f"Could not open the document: {exc}"}
+
+    try:
+        reports = _apply_pdf_image_replacements(doc, replacements, size_mode)
+        replaced = sum(1 for r in reports if r.get("replaced"))
+        if not replaced:
+            first_error = next((r.get("error") for r in reports if r.get("error")), None)
+            doc.close()
+            return {
+                "ok": False, "replaced": 0, "reports": reports,
+                "error": first_error or "No images were replaced.",
+            }
+        _save_pdf(doc, output_path)
+        doc.close()
+    except Exception as exc:
+        logger.error("Error replacing PDF images: %s", exc)
+        return {"ok": False, "replaced": 0, "reports": [], "error": str(exc)}
+
+    return {"ok": True, "replaced": replaced, "reports": reports, "error": None}
+
 
 def update_pdf_content(pdf_path: str, output_path: str, page_edits: list) -> bool:
     try:
@@ -467,25 +1181,11 @@ def selective_replace_pdf(
 def get_pdf_headers_footers(pdf_path: str) -> dict:
     try:
         doc = _open_pdf(pdf_path)
-        headers = []
-        footers = []
-        for i, page in enumerate(doc):
-            height = page.rect.height
-            width = page.rect.width
-            # Extract header text (top 45 points)
-            header_rect = fitz.Rect(0, 0, width, 45)
-            h_text = page.get_text("text", clip=header_rect).strip()
-            if h_text and h_text not in headers:
-                headers.append(h_text)
-
-            # Extract footer text (bottom 45 points)
-            footer_rect = fitz.Rect(0, height - 45, width, height)
-            f_text = page.get_text("text", clip=footer_rect).strip()
-            if f_text and f_text not in footers:
-                footers.append(f_text)
-
-        doc.close()
-        return {"headers": headers, "footers": footers}
+        try:
+            result = hf.read_pdf_headers_footers(doc)
+            return result
+        finally:
+            doc.close()
     except Exception as e:
         logger.error("Error getting PDF headers/footers: %s", e)
         return {"headers": [], "footers": []}
@@ -495,6 +1195,8 @@ def update_pdf_header_footer(
     output_path: str,
     header_text: str = None,
     footer_text: str = None,
+    **kwargs,
 ) -> bool:
-    return apply_pdf_styling(pdf_path, output_path, header_text=header_text, footer_text=footer_text)
+    return apply_pdf_styling(pdf_path, output_path, header_text=header_text,
+                             footer_text=footer_text, **kwargs)
 

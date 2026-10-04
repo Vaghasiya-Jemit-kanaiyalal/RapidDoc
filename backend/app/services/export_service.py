@@ -35,7 +35,7 @@ from RapidDoc.backend.app.services.docx_editor import (
     iter_docx_body_items,
 )
 from RapidDoc.backend.app.services.pdf_converter import convert_docx_bytes_to_pdf
-from RapidDoc.backend.app.services.pdf_editor import get_pdf_content
+from RapidDoc.backend.app.services.pdf_editor import get_pdf_content, get_pdf_image_slots
 
 logger = logging.getLogger(__name__)
 
@@ -574,30 +574,20 @@ def _build_pptx_uncached(file_path: str, file_type: str, theme: str) -> bytes:
 def _iter_pdf_images(file_path: str):
     """Yield ``(index, xref, mime, width, height)`` for every PDF image, in order.
 
-    ``index`` is the same global index used by ``get_pdf_content`` and by
-    :func:`get_document_images`, so all three agree on image identity.
+    Thin adapter over :func:`pdf_editor.iter_pdf_image_slots`, which is the one
+    canonical PDF image index space. This used to re-implement the walk itself;
+    the replacement writer numbered distinct xrefs while this counted
+    occurrences, so any PDF that repeated an image handed out numbers the writer
+    could not resolve. Deriving both from the same slots is what stops that.
     """
-    import fitz
-
-    with fitz.open(file_path) as doc:
-        index = 0
-        for page in doc:
-            for info in page.get_images(full=True):
-                xref = info[0]
-                try:
-                    extracted = doc.extract_image(xref)
-                except Exception:
-                    continue
-                if not extracted or not extracted.get("image"):
-                    continue
-                yield (
-                    index,
-                    xref,
-                    f"image/{extracted.get('ext', 'png')}",
-                    extracted.get("width"),
-                    extracted.get("height"),
-                )
-                index += 1
+    for slot in get_pdf_image_slots(file_path):
+        yield (
+            slot["index"],
+            slot["xref"],
+            slot["mime"],
+            slot["width"],
+            slot["height"],
+        )
 
 
 def get_document_images(file_path: str, file_type: str) -> list:

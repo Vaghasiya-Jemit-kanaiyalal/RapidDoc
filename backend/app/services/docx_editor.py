@@ -1,14 +1,16 @@
 import docx
 from docx.shared import Pt
-from docx.enum.shape import WD_INLINE_SHAPE_TYPE
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 import copy
+import io
 import logging
 import re
+
+from . import header_footer as hf
+from .image_geometry import ResizeError, describe_change, resolve_target_box
 
 logger = logging.getLogger(__name__)
 
@@ -245,31 +247,18 @@ def _replace_occurrences(p, find_text: str, replace_text: str, case_sensitive: b
 def get_docx_images_count(doc_path: str) -> int:
     """Number of distinct images in a DOCX.
 
+    Sourced from the one canonical traversal (:func:`collect_docx_image_targets`)
+    that the content endpoint, the image endpoint and the replacement writer all
+    use, so "how many images" can never disagree with "which image is #3".
+
     This used to count ``doc.inline_shapes`` of type PICTURE, which silently
     under-reports: anchored (floating) pictures are not inline shapes, so a
     document with one floating logo reported 6 while the editor - which walks
-    the body XML - correctly showed 7. Two different numbers for "how many
-    images does this document have" is exactly the kind of thing that makes a
-    UI look broken, so the count now comes from the same traversal the content
-    endpoint uses and is guaranteed to agree with it.
+    the body XML - correctly showed 7.
     """
     try:
         doc = docx.Document(doc_path)
-        # Apply the same part-level filter as get_docx_image_parts so the two
-        # can never disagree: a relationship with no part, or one whose blob
-        # cannot be read / is empty, is skipped there and must be skipped here.
-        count = 0
-        for r_id, _w, _h, _anchor in _iter_document_images(doc, set()):
-            part = doc.part.related_parts.get(r_id)
-            if part is None:
-                continue
-            try:
-                if not part.blob:
-                    continue
-            except Exception:
-                continue
-            count += 1
-        return count
+        return len(collect_docx_image_targets(doc))
     except Exception as e:
         logger.error("Error counting images in DOCX: %s", e)
         return 0
@@ -378,10 +367,14 @@ def _paragraph_descriptor(paragraph, index: int) -> dict:
 
 
 def _iter_blips_in(element, doc):
-    """Yield ``(rId, width_emu, height_emu)`` for every picture inside an element.
+    """Yield ``(rId, width_emu, height_emu, blip)`` for every picture in an element.
 
     ``a:blip`` is the low-level element behind both inline and anchored images,
     so this catches floating images that ``doc.inline_shapes`` never reports.
+
+    The ``blip`` element itself is yielded because the replacement writer needs
+    to repoint it at a new image part and rewrite the extents around it - neither
+    is reachable from a high-level python-docx shape object.
     """
     for drawing in element.iter():
         if drawing.tag not in (qn("w:drawing"), qn("w:pict")):
@@ -398,30 +391,109 @@ def _iter_blips_in(element, doc):
                 except (TypeError, ValueError):
                     width = height = None
                 break
-            yield r_id, width, height
+            yield r_id, width, height, blip
 
 
-def _iter_document_images(doc, seen: set):
-    """Yield ``(rId, width, height, anchor_index)`` for each *distinct* image, in order.
+def collect_docx_image_targets(doc) -> list:
+    """THE canonical DOCX image index space. One traversal, one numbering.
 
-    Shared with :func:`get_docx_image_parts` so the two agree exactly on
-    ordering and on skipping logos that the same relationship part repeats.
+    Every image-related feature in the app resolves an image by the integer this
+    function assigns, so there is exactly one definition of what "image 3" means:
 
-    ``anchor_index`` is the number of body paragraphs that precede the picture,
-    which is what lets a consumer (notably PPTX export) put an image on the
-    slide built from the text it illustrates. It is ``None`` for pictures that
-    live inside a table, where there is no single owning paragraph.
+      * ``GET /{id}/content``          - renders the tiles
+      * ``GET /{id}/images/{index}``   - serves the bytes
+      * ``images_count`` on the doc   - shown in the sidebar
+      * ``replace_docx_image``        - writes the new bytes
+
+    Entries look like::
+
+        {
+          "index": 0,                  # the stable public id
+          "r_id": "rId7",              # document.xml -> part relationship
+          "part": <ImagePart>,
+          "mime": "image/png",
+          "width_emu": 1905000,
+          "height_emu": 1905000,
+          "anchor_index": 4,           # body paragraphs before it (None in a table)
+          "blips": [<a:blip>, ...],    # EVERY blip sharing this r_id
+          "occurrences": 3,            # how many pictures use it
+        }
+
+    Two rules define the numbering, and the writer depends on both:
+
+    1. **Deduplicated by relationship.** One logo referenced from five places is
+       one part, so it is one entry with ``occurrences == 5``. Replacing it
+       replaces all five - which is what a user means by "replace the logo".
+
+    2. **Unreadable parts are skipped entirely and consume no index.** A
+       relationship with no part, or one whose blob cannot be read, is invisible
+       in the editor, so it must also be invisible to the writer - otherwise
+       every later index would be off by one between what the user clicked and
+       what gets written.
+
+    Note that ``doc.inline_shapes`` is deliberately NOT used anywhere: it lists
+    only *inline* pictures (floating ones vanish), it counts non-picture inline
+    shapes such as charts and OLE objects (shifting every index), and it does not
+    deduplicate shared parts. Using it for writes while reading from this walk is
+    exactly how a replacement ends up on the wrong picture.
     """
+    targets = []
+    by_r_id = {}
     paragraph_count = 0
+
     for child in doc.element.body.iterchildren():
         is_paragraph = child.tag == qn("w:p")
-        for r_id, width, height in _iter_blips_in(child, doc):
-            if r_id in seen:
+        for r_id, width, height, blip in _iter_blips_in(child, doc):
+            existing = by_r_id.get(r_id)
+            if existing is not None:
+                # A shared part: one image, another picture pointing at it.
+                existing["blips"].append(blip)
+                existing["occurrences"] += 1
                 continue
-            seen.add(r_id)
-            yield r_id, width, height, (paragraph_count if is_paragraph else None)
+
+            part = doc.part.related_parts.get(r_id)
+            if part is None:
+                continue
+            try:
+                if not part.blob:
+                    continue
+            except Exception:
+                continue
+
+            entry = {
+                "index": len(targets),
+                "r_id": r_id,
+                "part": part,
+                "mime": getattr(part, "content_type", None) or "image/png",
+                "width_emu": width,
+                "height_emu": height,
+                "anchor_index": paragraph_count if is_paragraph else None,
+                "blips": [blip],
+                "occurrences": 1,
+            }
+            targets.append(entry)
+            by_r_id[r_id] = entry
+
         if is_paragraph:
             paragraph_count += 1
+
+    return targets
+
+
+def docx_image_descriptors(doc) -> list:
+    """JSON-safe view of :func:`collect_docx_image_targets`."""
+    return [
+        {
+            "index": t["index"],
+            "r_id": t["r_id"],
+            "mime": t["mime"],
+            "width": round(t["width_emu"] / _EMU_PER_PX) if t["width_emu"] else None,
+            "height": round(t["height_emu"] / _EMU_PER_PX) if t["height_emu"] else None,
+            "anchor_index": t["anchor_index"],
+            "occurrences": t["occurrences"],
+        }
+        for t in collect_docx_image_targets(doc)
+    ]
 
 
 def iter_docx_body_items(doc_path: str):
@@ -432,6 +504,13 @@ def iter_docx_body_items(doc_path: str):
     position in ``doc.paragraphs``) so the existing edit/save/rewrite flows -
     which key off that index - keep working unchanged.
 
+    Image ``image_index`` values are looked up from
+    :func:`collect_docx_image_targets` rather than counted here. This function
+    already walks the body to interleave items, and counting a *second*, subtly
+    different index space in that walk is precisely the bug that used to make
+    the writer replace a different picture than the one the user clicked. One
+    numbering, one definition.
+
     Note: lxml hands out a fresh Python proxy object each time an element is
     reached, so the body children cannot be matched to ``doc.paragraphs`` by
     object identity. ``doc.paragraphs``/``doc.tables`` are simply the direct
@@ -440,35 +519,29 @@ def iter_docx_body_items(doc_path: str):
     """
     doc = docx.Document(doc_path)
     body = doc._body
-    paragraph_no = 0
-    table_no = 0
-    image_counter = 0
-    seen_rids = set()
+
+    # The canonical index space, resolved up front.
+    targets = collect_docx_image_targets(doc)
+    by_r_id = {t["r_id"]: t for t in targets}
+    emitted_indexes = set()
 
     def _images_for(child, anchor_index):
-        nonlocal image_counter
-        for r_id, width, height in _iter_blips_in(child, doc):
-            if r_id in seen_rids:
+        for r_id, _w, _h, _blip in _iter_blips_in(child, doc):
+            target = by_r_id.get(r_id)
+            if target is None or target["index"] in emitted_indexes:
                 continue
-            seen_rids.add(r_id)
-            part = doc.part.related_parts.get(r_id)
-            if part is None:
-                continue
-            try:
-                blob = part.blob
-            except Exception:
-                continue
-            if not blob:
-                continue
-            payload = {
-                "image_index": image_counter,
+            emitted_indexes.add(target["index"])
+            yield {
+                "image_index": target["index"],
                 "anchor_index": anchor_index,
-                "mime": getattr(part, "content_type", None) or "image/png",
-                "width_px": round(width / _EMU_PER_PX) if width else None,
-                "height_px": round(height / _EMU_PER_PX) if height else None,
+                "mime": target["mime"],
+                "width_px": round(target["width_emu"] / _EMU_PER_PX) if target["width_emu"] else None,
+                "height_px": round(target["height_emu"] / _EMU_PER_PX) if target["height_emu"] else None,
+                "occurrences": target["occurrences"],
             }
-            image_counter += 1
-            yield payload
+
+    paragraph_no = 0
+    table_no = 0
 
     for child in doc.element.body.iterchildren():
         if child.tag == qn("w:p"):
@@ -532,6 +605,11 @@ def get_docx_document_view(doc_path: str) -> dict:
                 "mime": payload["mime"],
                 "width": payload.get("width_px"),
                 "height": payload.get("height_px"),
+                # >1 means several pictures share this one stored file, so
+                # replacing it will change all of them. The editor says so
+                # rather than letting the user be surprised.
+                "occurrences": payload.get("occurrences", 1),
+                "anchor_index": payload.get("anchor_index"),
             })
         blocks.append({"kind": kind, **payload})
 
@@ -541,34 +619,406 @@ def get_docx_document_view(doc_path: str) -> dict:
 def get_docx_image_parts(doc_path: str) -> list:
     """Every image in the document, in reading order, with its bytes.
 
-    The ordering matches the ``image_index`` values produced by
-    :func:`iter_docx_body_items` and the ``index`` used by the image-replacement
-    feature, so one index space is shared by reads and writes.
+    The ``index`` here is read straight off
+    :func:`collect_docx_image_targets`, the same numbering the editor tiles use
+    and the replacement writer looks up, so one index space is shared by reads
+    and writes. Previously this function re-counted images with its own copy of
+    the walk; the docstring already *claimed* the spaces matched, and a
+    deduplication difference between the two copies silently broke that claim.
     """
     doc = docx.Document(doc_path)
-    parts = []
-    counter = 0
+    return [
+        {
+            "index": t["index"],
+            "mime": t["mime"],
+            "width": round(t["width_emu"] / _EMU_PER_PX) if t["width_emu"] else None,
+            "height": round(t["height_emu"] / _EMU_PER_PX) if t["height_emu"] else None,
+            "anchor_index": t["anchor_index"],
+            "occurrences": t["occurrences"],
+            "blob": t["part"].blob,
+        }
+        for t in collect_docx_image_targets(doc)
+    ]
 
-    for r_id, width, height, anchor_index in _iter_document_images(doc, set()):
-        part = doc.part.related_parts.get(r_id)
-        if part is None:
-            continue
+
+# ---------------------------------------------------------------------------
+# Image replacement
+# ---------------------------------------------------------------------------
+
+# How a new image that does not match the old one's aspect ratio is handled.
+SIZE_MODE_FIT = "fit"        # scale down to fit inside the original box (default)
+SIZE_MODE_STRETCH = "stretch"  # keep the exact box, distorting if ratios differ
+
+
+def _drawing_extent(drawing):
+    """Current ``(cx, cy)`` of a picture drawing, or ``(None, None)``.
+
+    ``wp:extent`` is the usual source but not the only one: a ``w:pict``/VML
+    picture, or a drawing whose layout element was written by another tool, can
+    carry the size only in ``pic:spPr/a:xfrm/a:ext``. Both are read so the
+    aspect-ratio fit below never divides by ``None``.
+    """
+    for extent in drawing.iter(qn("wp:extent")):
         try:
-            blob = part.blob
-        except Exception:
+            return int(extent.get("cx")), int(extent.get("cy"))
+        except (TypeError, ValueError):
+            break
+    for xfrm in drawing.iter(qn("a:xfrm")):
+        for ext in xfrm.iter(qn("a:ext")):
+            try:
+                return int(ext.get("cx")), int(ext.get("cy"))
+            except (TypeError, ValueError):
+                break
+    return None, None
+
+
+def _fit_extents(drawing, target_cx: int, target_cy: int, drop_crop: bool = False) -> None:
+    """Rewrite every size declaration inside a ``w:drawing`` / ``w:pict``.
+
+    A picture's rendered size is stated three times and Word uses different ones
+    in different contexts, so leaving any of them stale is what makes a replaced
+    image come out stretched:
+
+      * ``wp:extent``   - the inline/anchor box (layout)
+      * ``a:ext``       - the shape transform inside ``pic:spPr/a:xfrm``
+      * ``a:srcRect``   - a *crop* of the source image
+
+    The crop matters most and is easy to miss: if the original picture was
+    cropped, a replacement inherits that crop and shows up with pieces missing.
+
+    Only a *replacement* clears the crop. A resize must keep it - the user asked
+    for the same picture at a different size, and silently revealing cropped-away
+    regions is a different edit.
+    """
+    if target_cx is None or target_cy is None:
+        return
+
+    for extent in drawing.iter(qn("wp:extent")):
+        extent.set("cx", str(int(target_cx)))
+        extent.set("cy", str(int(target_cy)))
+        break
+
+    for xfrm in drawing.iter(qn("a:xfrm")):
+        for ext in xfrm.iter(qn("a:ext")):
+            ext.set("cx", str(int(target_cx)))
+            ext.set("cy", str(int(target_cy)))
+
+    if not drop_crop:
+        return
+
+    # Drop any inherited crop so the new image is shown whole.
+    for src_rect in drawing.iter(qn("a:srcRect")):
+        parent = src_rect.getparent()
+        if parent is not None:
+            parent.remove(src_rect)
+
+
+def _fit_to_aspect(cx: int, cy: int, new_image):
+    """Shrink a ``(cx, cy)`` box to a new image's aspect ratio, never enlarging.
+
+    Shrinking the *box* rather than stretching the image is what keeps a
+    replacement undistorted. Position is untouched: an inline picture is placed
+    by paragraph alignment and an anchored one by its ``positionH``/``positionV``
+    offsets, neither of which changes here.
+
+    Returns ``(new_cx, new_cy, was_scaled)``.
+    """
+    try:
+        new_ratio = float(new_image.px_width) / float(new_image.px_height)
+        old_ratio = float(cx) / float(cy)
+    except (AttributeError, TypeError, ValueError, ZeroDivisionError):
+        return cx, cy, False
+    if new_ratio <= 0 or abs(new_ratio - old_ratio) <= 0.01:
+        return cx, cy, False
+    if new_ratio > old_ratio:
+        new_cy = max(1, min(int(round(cx / new_ratio)), cy))
+        new_cx = cx
+    else:
+        new_cx = max(1, min(int(round(cy * new_ratio)), cx))
+        new_cy = cy
+    return new_cx, new_cy, True
+
+
+def _apply_docx_image_replacements(doc, replacements: list, size_mode: str = SIZE_MODE_FIT) -> list:
+    """Swap the bytes behind specific images of an open Document.
+
+    ``replacements`` is a list of ``{"target_index": int, "image_bytes": bytes}``
+    resolved against :func:`collect_docx_image_targets`, i.e. the same integers
+    the editor renders.
+
+    Why this repoints relationships instead of overwriting a part's blob
+    ---------------------------------------------------------------------
+    The old implementation did ``image_part._blob = new_bytes``. That is wrong
+    twice over:
+
+    * **It corrupted the file whenever the formats differed.** The part keeps its
+      declared ``content_type`` and its ``word/media/imageN.jpeg`` filename while
+      now holding PNG bytes. Word treats that as a corrupt document and offers
+      to "repair" it, losing the edit. ``get_or_add_image`` instead creates a
+      part with the correct extension and content type, so format never matters.
+    * **It could not target the picture the user clicked**, because it looked the
+      target up in ``doc.inline_shapes`` - a different numbering from the reader
+      (see :func:`collect_docx_image_targets`).
+
+    Repointing also means every picture sharing the old part is repointed, which
+    is the correct behaviour for "replace the logo": the user sees one tile, so
+    replacing it changes all of its occurrences. ``occurrences`` in the returned
+    report says so out loud instead of doing it silently.
+
+    Returns one report dict per replacement; never raises for a single bad
+    target, so a batch where image 4 is out of range still writes images 0-3.
+    """
+    if not replacements:
+        return []
+
+    targets = collect_docx_image_targets(doc)
+    by_index = {t["index"]: t for t in targets}
+    reports = []
+
+    for rep in replacements:
+        idx = rep.get("target_index")
+        img_bytes = rep.get("image_bytes")
+        report = {"index": idx, "replaced": False, "occurrences": 0}
+
+        if idx is None or not img_bytes:
+            report["error"] = "No image data was provided."
+            reports.append(report)
             continue
-        if not blob:
+
+        target = by_index.get(idx)
+        if target is None:
+            report["error"] = (
+                f"Image {idx} does not exist in this document "
+                f"(it has {len(targets)} image{'s' if len(targets) != 1 else ''})."
+            )
+            reports.append(report)
             continue
-        parts.append({
-            "index": counter,
-            "mime": getattr(part, "content_type", None) or "image/png",
-            "width": round(width / _EMU_PER_PX) if width else None,
-            "height": round(height / _EMU_PER_PX) if height else None,
-            "anchor_index": anchor_index,
-            "blob": blob,
-        })
-        counter += 1
-    return parts
+
+        try:
+            new_r_id, new_image = doc.part.get_or_add_image(io.BytesIO(img_bytes))
+        except Exception as exc:
+            report["error"] = f"That file is not a usable image: {exc}"
+            reports.append(report)
+            continue
+
+        scaled = False
+        no_extent = False
+
+        for blip in target["blips"]:
+            blip.set(qn("r:embed"), new_r_id)
+
+            drawing = blip.getparent()
+            while drawing is not None and drawing.tag not in (qn("w:drawing"), qn("w:pict")):
+                drawing = drawing.getparent()
+            if drawing is None:
+                continue
+
+            # The extent is re-resolved per drawing rather than trusting the
+            # value cached during the read: a VML picture, or a drawing written
+            # by another tool, may declare its size only in a:xfrm/a:ext - and a
+            # missing extent must not be read as a zero-size box.
+            cx, cy = _drawing_extent(drawing)
+            if cx is None or cy is None:
+                # Nothing declares a size, so there is no aspect ratio to
+                # preserve and nothing to rewrite. The swap itself still happened.
+                no_extent = True
+                continue
+
+            new_cx, new_cy, changed = (
+                _fit_to_aspect(cx, cy, new_image)
+                if size_mode == SIZE_MODE_FIT
+                else (cx, cy, False)
+            )
+            _fit_extents(drawing, new_cx, new_cy, drop_crop=True)
+            scaled = scaled or changed
+
+        report["replaced"] = True
+        report["occurrences"] = target["occurrences"]
+        report["previous_mime"] = target["mime"]
+        report["new_mime"] = new_image.content_type
+        report["scaled"] = scaled
+        if no_extent:
+            report["no_extent"] = True
+        reports.append(report)
+        logger.info(
+            "Replaced DOCX image %d (%s -> %s, %d occurrence(s), scaled=%s)",
+            idx, target["mime"], new_image.content_type, target["occurrences"], scaled,
+        )
+
+    return reports
+
+
+def replace_docx_images(
+    doc_path: str,
+    output_path: str,
+    replacements: list,
+    size_mode: str = SIZE_MODE_FIT,
+) -> dict:
+    """Replace images in a DOCX and write the result to ``output_path``.
+
+    Returns ``{"ok": bool, "replaced": n, "reports": [...], "error": str|None}``.
+    Never raises: callers turn ``error`` into an HTTP message.
+    """
+    try:
+        doc = docx.Document(doc_path)
+    except Exception as exc:
+        return {"ok": False, "replaced": 0, "reports": [], "error": f"Could not open the document: {exc}"}
+
+    try:
+        reports = _apply_docx_image_replacements(doc, replacements, size_mode)
+    except Exception as exc:
+        logger.error("Error replacing DOCX images: %s", exc)
+        return {"ok": False, "replaced": 0, "reports": [], "error": str(exc)}
+
+    replaced = sum(1 for r in reports if r.get("replaced"))
+    if not replaced:
+        first_error = next((r.get("error") for r in reports if r.get("error")), None)
+        return {
+            "ok": False,
+            "replaced": 0,
+            "reports": reports,
+            "error": first_error or "No images were replaced.",
+        }
+
+    try:
+        _save_docx_clean(doc, output_path)
+    except Exception as exc:
+        logger.error("Error saving DOCX after image replacement: %s", exc)
+        return {"ok": False, "replaced": replaced, "reports": reports, "error": str(exc)}
+
+    return {"ok": True, "replaced": replaced, "reports": reports, "error": None}
+
+
+def _drawing_for_blip(blip):
+    """The ``w:drawing`` / ``w:pict`` element wrapping an ``a:blip``."""
+    node = blip.getparent()
+    while node is not None and node.tag not in (qn("w:drawing"), qn("w:pict")):
+        node = node.getparent()
+    return node
+
+
+def _apply_docx_image_resizes(doc, resizes: list) -> list:
+    """Apply resize requests to an open DOCX, on the canonical index space.
+
+    Unlike replacement, a resize is a *layout* change, so each picture is resized
+    independently even when several of them share one image part: the same logo
+    used at 2in in the header and 0.5in in the footer must keep both sizes.
+
+    Returns one report per request rather than raising, so a bad entry in a batch
+    does not abandon the good ones next to it.
+    """
+    targets = {t["index"]: t for t in collect_docx_image_targets(doc)}
+    reports = []
+
+    for req in resizes:
+        idx = req.get("target_index")
+        report = {"index": idx, "resized": False, "placements": 0}
+
+        if idx is None:
+            report["error"] = "No image was identified to resize."
+            reports.append(report)
+            continue
+
+        target = targets.get(idx)
+        if target is None:
+            report["error"] = (
+                f"Image {idx} does not exist in this document "
+                f"(it has {len(targets)} image{'s' if len(targets) != 1 else ''})."
+            )
+            reports.append(report)
+            continue
+
+        try:
+            changed = 0
+            last = None
+            for blip in target["blips"]:
+                drawing = _drawing_for_blip(blip)
+                if drawing is None:
+                    continue
+                old_cx, old_cy = _drawing_extent(drawing)
+                new_cx, new_cy = resolve_target_box(
+                    old_cx, old_cy,
+                    width=req.get("width"),
+                    height=req.get("height"),
+                    unit=req.get("unit", "px"),
+                    keep_aspect=req.get("keep_aspect", True),
+                )
+                if (new_cx, new_cy) != (old_cx, old_cy):
+                    _fit_extents(drawing, new_cx, new_cy)
+                    changed += 1
+                last = (old_cx, old_cy, new_cx, new_cy)
+        except ResizeError as exc:
+            report["error"] = str(exc)
+            reports.append(report)
+            continue
+
+        if not target["blips"]:
+            report["error"] = "That image could not be located in the document body."
+            reports.append(report)
+            continue
+
+        report["resized"] = True
+        report["placements"] = changed
+        if last:
+            report["change"] = describe_change(*last)
+        reports.append(report)
+
+    return reports
+
+
+def resize_docx_images(doc_path: str, output_path: str, resizes: list) -> dict:
+    """Resize images in a DOCX, writing the result to ``output_path``.
+
+    ``resizes`` is ``[{"target_index": int, "width": float|None,
+    "height": float|None, "unit": "px", "keep_aspect": bool}]``.
+
+    Returns ``{"ok": bool, "resized": n, "reports": [...], "error": str|None}``
+    with the same never-raises contract as :func:`replace_docx_images`.
+    """
+    if not resizes:
+        return {"ok": False, "resized": 0, "reports": [], "error": "No image was identified to resize."}
+
+    try:
+        doc = docx.Document(doc_path)
+    except Exception as exc:
+        return {"ok": False, "resized": 0, "reports": [], "error": f"Could not open the document: {exc}"}
+
+    try:
+        reports = _apply_docx_image_resizes(doc, resizes)
+    except Exception as exc:
+        logger.error("Error resizing DOCX images: %s", exc)
+        return {"ok": False, "resized": 0, "reports": [], "error": str(exc)}
+
+    resized = sum(1 for r in reports if r.get("resized"))
+    if not resized:
+        first_error = next((r.get("error") for r in reports if r.get("error")), None)
+        return {
+            "ok": False,
+            "resized": 0,
+            "reports": reports,
+            "error": first_error or "No images were resized.",
+        }
+
+    try:
+        _save_docx_clean(doc, output_path)
+    except Exception as exc:
+        logger.error("Error saving DOCX after image resize: %s", exc)
+        return {"ok": False, "resized": resized, "reports": reports, "error": str(exc)}
+
+    return {"ok": True, "resized": resized, "reports": reports, "error": None}
+
+
+def _docx_core_title(doc) -> str:
+    """The document's own title property, used as the ``{TITLE}`` cached value.
+
+    Word recomputes a ``TITLE`` field on open, so this only affects viewers that
+    show the cached result instead of evaluating the field.
+    """
+    try:
+        return (doc.core_properties.title or "").strip()
+    except Exception:
+        return ""
+
 
 def apply_docx_styling(
     doc_path: str,
@@ -580,17 +1030,19 @@ def apply_docx_styling(
     target_header_text: str = None,
     target_footer_text: str = None,
     image_replacements: list = None,  # List of dicts: [{"target_index": int, "image_bytes": bytes}]
-    alignment: str = None
+    alignment: str = None,
+    header_text_odd: str = None,
+    header_text_even: str = None,
+    header_text_first: str = None,
+    footer_text_odd: str = None,
+    footer_text_even: str = None,
+    footer_text_first: str = None,
+    header_alignment: str = None,
+    footer_alignment: str = None,
+    doc_title: str = None,
 ) -> bool:
     try:
         doc = docx.Document(doc_path)
-
-        align_map = {
-            'left': WD_ALIGN_PARAGRAPH.LEFT,
-            'center': WD_ALIGN_PARAGRAPH.CENTER,
-            'right': WD_ALIGN_PARAGRAPH.RIGHT,
-            'justify': WD_ALIGN_PARAGRAPH.JUSTIFY
-        }
 
         # 1. Update font and sizes for paragraphs
         if font_name or font_size:
@@ -614,63 +1066,35 @@ def apply_docx_styling(
                                     run.font.size = Pt(font_size)
 
         # 2. Update Header/Footer
-        for section in doc.sections:
-            if header_text is not None:
-                header = section.header
-                current_header_text = "\n".join(p.text for p in header.paragraphs).strip()
-                if target_header_text is None or current_header_text == target_header_text:
-                    # Clear existing header paragraphs
-                    for p in header.paragraphs:
-                        p.text = ""
-                    p = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
-                    p.text = header_text
-                    if alignment and alignment.lower() in align_map:
-                        p.alignment = align_map[alignment.lower()]
-                    for run in p.runs:
-                        if font_name:
-                            run.font.name = font_name
-                        if font_size:
-                            run.font.size = Pt(font_size)
-
-            if footer_text is not None:
-                footer = section.footer
-                current_footer_text = "\n".join(p.text for p in footer.paragraphs).strip()
-                if target_footer_text is None or current_footer_text == target_footer_text:
-                    # Clear existing footer paragraphs
-                    for p in footer.paragraphs:
-                        p.text = ""
-                    p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-                    p.text = footer_text
-                    if alignment and alignment.lower() in align_map:
-                        p.alignment = align_map[alignment.lower()]
-                    for run in p.runs:
-                        if font_name:
-                            run.font.name = font_name
-                        if font_size:
-                            run.font.size = Pt(font_size)
+        hf.apply_docx_headers_footers(
+            doc,
+            hf.restrict_docx_spec(
+                doc,
+                hf.spec_from_legacy(
+                    header_text=header_text,
+                    header_odd=header_text_odd,
+                    header_even=header_text_even,
+                    header_first=header_text_first,
+                    footer_text=footer_text,
+                    footer_odd=footer_text_odd,
+                    footer_even=footer_text_even,
+                    footer_first=footer_text_first,
+                ),
+                target_header=target_header_text,
+                target_footer=target_footer_text,
+            ),
+            font_name=font_name,
+            font_size=font_size,
+            header_align=header_alignment or alignment or "center",
+            footer_align=footer_alignment or alignment or "center",
+            title=doc_title if doc_title is not None else _docx_core_title(doc),
+        )
 
         # 3. Image replacement
+        #    Delegates to the shared writer so /style and /replace-image cannot
+        #    drift apart in how they number or match pictures.
         if image_replacements:
-            # Collect all shapes that are pictures
-            pics = []
-            for shape in doc.inline_shapes:
-                if shape.type == WD_INLINE_SHAPE_TYPE.PICTURE:
-                    pics.append(shape)
-
-            for rep in image_replacements:
-                idx = rep.get("target_index")
-                img_bytes = rep.get("image_bytes")
-                if idx is not None and img_bytes and 0 <= idx < len(pics):
-                    target_shape = pics[idx]
-                    try:
-                        # Access internal XML element for embedding
-                        rId = target_shape._inline.graphic.graphicData.pic.blipFill.blip.embed
-                        # Update binary blob in Zip archive package
-                        image_part = doc.part.related_parts[rId]
-                        image_part._blob = img_bytes
-                        logger.info("Successfully replaced DOCX image at index %d", idx)
-                    except Exception as img_err:
-                        logger.error("Failed to replace image at index %d: %s", idx, img_err)
+            _apply_docx_image_replacements(doc, image_replacements)
 
         _save_docx_clean(doc, output_path)
         return True
@@ -711,26 +1135,7 @@ def get_docx_content(doc_path: str) -> list:
 def get_docx_headers_footers(doc_path: str) -> dict:
     try:
         doc = docx.Document(doc_path)
-        headers = []
-        footers = []
-        seen_headers = set()
-        seen_footers = set()
-        for section in doc.sections:
-            header_text = "\n".join(p.text for p in section.header.paragraphs).strip()
-            # Keep document order and drop exact repeats, rather than collecting
-            # into a set: a set has no defined iteration order, so the "first"
-            # header the editor renders could differ between runs.
-            if header_text and header_text not in seen_headers:
-                seen_headers.add(header_text)
-                headers.append(header_text)
-            footer_text = "\n".join(p.text for p in section.footer.paragraphs).strip()
-            if footer_text and footer_text not in seen_footers:
-                seen_footers.add(footer_text)
-                footers.append(footer_text)
-        return {
-            "headers": headers,
-            "footers": footers
-        }
+        return hf.read_docx_headers_footers(doc)
     except Exception as e:
         logger.error("Error getting DOCX headers/footers: %s", e)
         return {"headers": [], "footers": []}

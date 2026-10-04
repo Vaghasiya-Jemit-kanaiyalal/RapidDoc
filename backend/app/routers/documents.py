@@ -20,11 +20,17 @@ from RapidDoc.backend.app.services.storage import storage_service
 from RapidDoc.backend.app.services.docx_editor import (
     apply_docx_styling, get_docx_images_count, get_docx_content, update_docx_content, find_replace_docx,
     find_text_variants, selective_replace_docx, iter_docx_body_items, get_docx_image_parts,
-    get_docx_document_view
+    get_docx_document_view, replace_docx_images, resize_docx_images
 )
 from RapidDoc.backend.app.services.pdf_editor import (
     apply_pdf_styling, get_pdf_images_count, get_pdf_content, update_pdf_content, find_replace_pdf,
-    find_text_variants_pdf, selective_replace_pdf
+    find_text_variants_pdf, selective_replace_pdf, replace_pdf_images, resize_pdf_images
+)
+from RapidDoc.backend.app.services.image_resolver import (
+    build_image_inventory,
+    read_and_validate_image,
+    resolve_image_targets,
+    _public_inventory,
 )
 from RapidDoc.backend.app.services.gemini_service import (
     generate_mcqs, summarize_document, understand_command, rewrite_text
@@ -34,7 +40,14 @@ from RapidDoc.backend.app.services.export_service import (
     build_txt_bytes_with_status, build_pptx_bytes_with_status,
     get_document_image_bytes, get_document_images
 )
-from RapidDoc.backend.app.models import DocumentMetadata, ContentUpdateRequest, FindReplaceRequest, AICommandRequest, FindVariantsRequest, SelectiveReplaceRequest, HeaderFooterRequest, PipelineUpdateRequest, RewriteRequest, SummarizeRequest, GenerateMCQRequest
+from RapidDoc.backend.app.services.version_history import (
+    find_version, list_versions, restore_version, snapshot_version,
+)
+from RapidDoc.backend.app.services.summary_export import (
+    SUPPORTED_FORMATS as SUPPORTED_SUMMARY_FORMATS,
+    build_summary_bytes,
+)
+from RapidDoc.backend.app.models import DocumentMetadata, ContentUpdateRequest, FindReplaceRequest, AICommandRequest, FindVariantsRequest, SelectiveReplaceRequest, HeaderFooterRequest, PipelineUpdateRequest, RewriteRequest, SummarizeRequest, GenerateMCQRequest, ImageResizeRequest, SummaryExportRequest
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +142,29 @@ def verify_upload_bytes(content: bytes, ext: str) -> None:
                 "The extension does not match the file's contents."
             )
         )
+
+    if ext.lower() == ".pdf":
+        # The magic bytes alone are not enough: a truncated or hand-written file
+        # starts with "%PDF-" and then fails on every later read, which is the
+        # same dead end this check exists to prevent. Opening it is lazy, so this
+        # costs almost nothing on a real upload.
+        try:
+            import fitz
+
+            with fitz.open(stream=content, filetype="pdf") as probe:
+                if probe.page_count < 1:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="This PDF contains no pages.",
+                    )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This .pdf file is corrupt and cannot be opened. "
+                       "The file may be incomplete or damaged.",
+            )
 
     if ext.lower() == ".docx":
         # A DOCX is a ZIP that must contain the main document part. The magic
@@ -255,17 +291,25 @@ def _unit_text(file_path: str, file_type: str, which) -> str:
     return None, None
 
 
-def ensure_edited_version(doc: dict, db) -> dict:
+def ensure_edited_version(doc: dict, db, action: Optional[str] = None) -> dict:
     """Copy-on-write preserving the uploaded original file.
 
     The first edit that rewrites a file creates a new 'edited' copy and records
     the uploaded file in `original_storage_path`. All later edits keep applying
     to the edited copy, so the user's original document is never destroyed.
 
+    `action` names the change about to run. Once a document is already in edited
+    mode this copy is the only remaining record of the state that change is about
+    to overwrite, so it is snapshotted into the version timeline - that is what
+    makes an individual edit reversible from the UI. On the first edit there is
+    nothing to snapshot: the copy being made *is* the original.
+
     Returns the (path, fields) tuple: the active writable path and the metadata
     fields to persist in MongoDB.
     """
     if doc.get("original_storage_path"):
+        if action:
+            snapshot_version(db, doc, action)
         return storage_service.get_file_path(doc["storage_path"]), {}
 
     orig_path = storage_service.get_file_path(doc["storage_path"])
@@ -627,7 +671,7 @@ async def update_document_style(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        active_path, version_fields = ensure_edited_version(doc, db)
+        active_path, version_fields = ensure_edited_version(doc, db, action="Styling update")
         
         # Read the replacement image if provided
         image_replacements = []
@@ -640,17 +684,24 @@ async def update_document_style(
 
         # Set up a new temporary/edit path or overwrite (we'll overwrite or version, overwrite is standard here)
         success = False
+        styling_kwargs = dict(
+            font_name=font_name, font_size=font_size,
+            header_text=header_text, footer_text=footer_text,
+            target_header_text=target_header_text, target_footer_text=target_footer_text,
+            image_replacements=image_replacements,
+            # Resolved against the *original* upload name: the working copy sits
+            # in a version folder, so its path would render a meaningless
+            # {FILENAME}.
+            doc_filename=doc.get("name") or "",
+            doc_title=(doc.get("title") or "").strip(),
+        )
         if doc["file_type"] == "docx":
             success = await run_in_threadpool(
-                apply_docx_styling, active_path, active_path,
-                font_name, font_size, header_text, footer_text,
-                target_header_text, target_footer_text, image_replacements,
+                apply_docx_styling, active_path, active_path, **styling_kwargs,
             )
         elif doc["file_type"] == "pdf":
             success = await run_in_threadpool(
-                apply_pdf_styling, active_path, active_path,
-                font_name, font_size, header_text, footer_text,
-                target_header_text, target_footer_text, image_replacements,
+                apply_pdf_styling, active_path, active_path, **styling_kwargs,
             )
         
         if not success:
@@ -744,20 +795,36 @@ async def update_document_header_footer_endpoint(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        active_path, version_fields = ensure_edited_version(doc, db)
+        active_path, version_fields = ensure_edited_version(doc, db, action="Header & footer update")
         success = False
 
+        hf_kwargs = dict(
+            font_name=request.font_name, font_size=request.font_size,
+            header_text=request.header_text, footer_text=request.footer_text,
+            target_header_text=request.target_header_text,
+            target_footer_text=request.target_footer_text,
+            alignment=request.alignment,
+            header_text_odd=request.header_text_odd,
+            header_text_even=request.header_text_even,
+            header_text_first=request.header_text_first,
+            footer_text_odd=request.footer_text_odd,
+            footer_text_even=request.footer_text_even,
+            footer_text_first=request.footer_text_first,
+            header_alignment=request.header_alignment,
+            footer_alignment=request.footer_alignment,
+            # Resolved against the *original* upload name: the working copy sits
+            # in a version folder, so its path would render a meaningless
+            # {FILENAME}.
+            doc_filename=doc.get("name") or "",
+            doc_title=(doc.get("title") or "").strip(),
+        )
         if doc["file_type"] == "docx":
             success = await run_in_threadpool(
-                apply_docx_styling, active_path, active_path,
-                request.font_name, request.font_size, request.header_text, request.footer_text,
-                request.target_header_text, request.target_footer_text, None, request.alignment,
+                apply_docx_styling, active_path, active_path, **hf_kwargs,
             )
         elif doc["file_type"] == "pdf":
             success = await run_in_threadpool(
-                apply_pdf_styling, active_path, active_path,
-                request.font_name, request.font_size, request.header_text, request.footer_text,
-                request.target_header_text, request.target_footer_text, None, request.alignment,
+                apply_pdf_styling, active_path, active_path, **hf_kwargs,
             )
 
         if not success:
@@ -765,10 +832,20 @@ async def update_document_header_footer_endpoint(
 
         current_date = datetime.now().strftime("%Y-%m-%d")
         changes_desc = []
-        if request.header_text is not None:
-            changes_desc.append(f"Header: '{request.header_text}'")
-        if request.footer_text is not None:
-            changes_desc.append(f"Footer: '{request.footer_text}'")
+        for label, value in (
+            ("Header", request.header_text),
+            ("Footer", request.footer_text),
+            ("Header (odd pages)", request.header_text_odd),
+            ("Header (even pages)", request.header_text_even),
+            ("Header (first page)", request.header_text_first),
+            ("Footer (odd pages)", request.footer_text_odd),
+            ("Footer (even pages)", request.footer_text_even),
+            ("Footer (first page)", request.footer_text_first),
+        ):
+            if value:
+                changes_desc.append(f"{label}: '{value}'")
+        if not changes_desc:
+            changes_desc.append("cleared")
 
         edit_entry = {
             "date": current_date,
@@ -937,6 +1014,40 @@ async def get_document_content(
         raise HTTPException(status_code=500, detail="Internal server error while retrieving document content.")
 
 
+@router.get("/{doc_id}/images")
+async def list_document_images(
+    doc_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Every image in the document, on the canonical index space.
+
+    The editor already receives these alongside the content, so this exists for
+    the two cases that need them without a full content fetch: showing the user
+    which image a natural-language request resolved to, and letting the client
+    confirm a target before committing an upload.
+    """
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        file_path = storage_service.get_file_path(doc["storage_path"])
+        inventory = await run_in_threadpool(
+            build_image_inventory, file_path, doc["file_type"]
+        )
+        return {
+            "status": "success",
+            "count": len(inventory),
+            "images": _public_inventory(inventory),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error listing document images: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error while listing images.")
+
+
 @router.get("/{doc_id}/images/{index}")
 async def get_document_image(
     doc_id: str,
@@ -970,6 +1081,461 @@ async def get_document_image(
         raise HTTPException(status_code=500, detail="Internal server error while retrieving the image.")
 
 
+@router.post("/{doc_id}/replace-image")
+async def replace_document_image(
+    doc_id: str,
+    image_file: UploadFile = File(...),
+    image_index: Optional[int] = Form(None),
+    page: Optional[int] = Form(None),
+    command: Optional[str] = Form(None),
+    size_mode: str = Form("fit"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Swap the picture at a chosen position for an uploaded image.
+
+    Accepts three ways to name the target, in precedence order:
+
+      * ``image_index`` - the integer the editor already shows. Used by the
+        double-click flow, where the user has literally clicked the picture.
+      * ``page``        - 1-based, PDFs only.
+      * ``command``     - free text, resolved by
+        :func:`image_resolver.resolve_image_targets` ("the image on page 2",
+        "image 3", "the logo"). No model is involved.
+
+    Returns the refreshed image inventory so the client can re-render without a
+    second round trip, plus a human-readable ``message`` explaining what actually
+    happened - including when one stored picture is drawn in several places and
+    therefore all of them changed.
+
+    The upload is validated before any writer opens, and a failed replacement
+    never leaves a partially written document: the writer writes to the same
+    path it was given, and it is only called once the bytes are known good.
+    """
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        if doc["file_type"] not in ("docx", "pdf"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Image replacement is not supported for .{doc['file_type']} files.",
+            )
+
+        # ---- validate the upload first; never open a writer on bad bytes ----
+        raw = await image_file.read()
+        try:
+            await run_in_threadpool(read_and_validate_image, raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+        file_path = storage_service.get_file_path(doc["storage_path"])
+        file_type = doc["file_type"]
+
+        # ---- work out the target -------------------------------------------
+        if image_index is not None:
+            if image_index < 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Image index must be zero or greater.",
+                )
+            indexes = [image_index]
+            reason = "selected directly"
+        else:
+            if page is not None:
+                synthetic = f"the image on page {page}"
+            else:
+                synthetic = command or ""
+
+            resolution = await run_in_threadpool(
+                resolve_image_targets, synthetic, file_path, file_type
+            )
+
+            if resolution["status"] == "empty":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=resolution["message"],
+                )
+            if resolution["status"] == "unresolved":
+                # The wording does not identify an image. This is a bad request
+                # the user must reword, so it is a 400 with an explanation -
+                # distinct from "ambiguous", where the request is valid but the
+                # client has to choose from the candidates returned.
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=resolution["message"],
+                )
+            if resolution["status"] == "ambiguous":
+                return JSONResponse(
+                    status_code=status.HTTP_409_CONFLICT,
+                    content={
+                        "status": resolution["status"],
+                        "message": resolution["message"],
+                        "candidates": resolution.get("candidates") or [],
+                        "images": resolution.get("inventory") or [],
+                    },
+                )
+
+            indexes = resolution["indexes"]
+            reason = resolution.get("reason", "")
+
+        if not indexes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="I could not work out which image to replace.",
+            )
+
+        # ---- write -----------------------------------------------------------
+        active_path, version_fields = ensure_edited_version(
+            doc, db, action=f"Image replacement ({', '.join(str(i + 1) for i in indexes)})"
+        )
+        replacements = [{"target_index": i, "image_bytes": raw} for i in indexes]
+
+        if file_type == "docx":
+            outcome = await run_in_threadpool(
+                replace_docx_images, active_path, active_path, replacements, size_mode
+            )
+        else:
+            outcome = await run_in_threadpool(
+                replace_pdf_images, active_path, active_path, replacements, size_mode
+            )
+
+        if not outcome.get("ok"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=outcome.get("error") or "The image could not be replaced.",
+            )
+
+        # ---- report ------------------------------------------------------------
+        reports = [r for r in outcome["reports"] if r.get("replaced")]
+        notes = []
+        for r in reports:
+            if r.get("occurrences", 1) > 1:
+                notes.append(
+                    f"Image {r['index'] + 1} is the same stored picture used in "
+                    f"{r['occurrences']} places, so all of them now show the new image."
+                )
+            if r.get("scaled"):
+                notes.append(
+                    f"Image {r['index'] + 1} was scaled to fit its original box so it "
+                    "would not be stretched."
+                )
+            if r.get("no_extent"):
+                notes.append(
+                    f"Image {r['index'] + 1} declares no size, so it kept whatever size "
+                    "the document gives it."
+                )
+            if r.get("resource_warning"):
+                notes.append(
+                    f"Image {r['index'] + 1} is stored in a format that had to be "
+                    "rewritten, so re-check the surrounding images."
+                )
+
+        message = (
+            f"Replaced image {indexes[0] + 1}"
+            if len(indexes) == 1
+            else f"Replaced {len(indexes)} images"
+        )
+        if reason:
+            message += f" ({reason})"
+        if notes:
+            message += ". " + " ".join(notes)
+
+        images_count = await run_in_threadpool(
+            _count_images, active_path, f".{file_type}"
+        )
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {
+                "$push": {"edit_history": {
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "action": f"Replaced image(s) {', '.join(str(i + 1) for i in indexes)}",
+                }},
+                "$set": {"images_count": images_count, **version_fields},
+            },
+        )
+
+        refreshed = await run_in_threadpool(
+            build_image_inventory, active_path, file_type
+        )
+
+        return {
+            "status": "success",
+            "action": "replace_image",
+            "replaced": outcome["replaced"],
+            "indexes": indexes,
+            "reports": outcome["reports"],
+            "message": message,
+            # The client keys image URLs by index, so it must be told to refetch
+            # or it will keep showing the bytes it cached before the swap.
+            "images_version": datetime.now().isoformat(),
+            "images_count": images_count,
+            "images": _public_inventory(refreshed),
+        }
+    except HTTPException:
+        raise
+    except ConnectionError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    except Exception as e:
+        logger.error("Error replacing document image: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error while replacing the image.")
+
+
+@router.post("/{doc_id}/resolve-image")
+async def resolve_document_image_target(
+    doc_id: str,
+    command: str = Form(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Resolve a phrase to image target(s) without uploading anything.
+
+    Lets the prompt bar tell the user "I found 2 images on page 3 - which one?"
+    *before* they hand over a file, instead of after.
+    """
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        file_path = storage_service.get_file_path(doc["storage_path"])
+        resolution = await run_in_threadpool(
+            resolve_image_targets, command, file_path, doc["file_type"]
+        )
+        return {
+            "status": "success",
+            **resolution,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error resolving image target: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error while resolving the image target.")
+
+
+@router.post("/{doc_id}/resize-image")
+async def resize_document_images(
+    doc_id: str,
+    payload: ImageResizeRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Change how large a picture prints, without touching its pixels.
+
+    Accepts a batch so the dialog can resize several pictures in one save, and
+    names targets the same way everything else does - the canonical image index,
+    which is the integer already shown on the tile.
+
+    Distinguishes the two failure kinds the same way ``/replace-image`` does:
+    a request that cannot be honoured (no size, zero, unknown unit, a rotated
+    picture) is a 400 with an explanation, because re-sending it unchanged would
+    fail the same way.
+
+    Returns the refreshed inventory so the client can re-render in one round
+    trip, plus the before/after size of each picture so the UI can confirm what
+    it actually did rather than what was asked.
+    """
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        if doc["file_type"] not in ("docx", "pdf"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Image resizing is not supported for .{doc['file_type']} files.",
+            )
+
+        if not payload.items:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No image was identified to resize.",
+            )
+
+        file_type = doc["file_type"]
+        resizes = [
+            {
+                "target_index": item.index,
+                "width": item.width,
+                "height": item.height,
+                "unit": item.unit,
+                "keep_aspect": item.keep_aspect,
+                "anchor": item.anchor,
+            }
+            for item in payload.items
+        ]
+
+        active_path, version_fields = ensure_edited_version(
+            doc, db, action=f"Image resize ({len(payload.items)} image(s))"
+        )
+        if file_type == "docx":
+            outcome = await run_in_threadpool(
+                resize_docx_images, active_path, active_path, resizes
+            )
+        else:
+            outcome = await run_in_threadpool(
+                resize_pdf_images, active_path, active_path, resizes
+            )
+
+        if not outcome.get("ok"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=outcome.get("error") or "The image could not be resized.",
+            )
+
+        reports = [r for r in outcome["reports"] if r.get("resized")]
+        indexes = [r["index"] for r in reports]
+        message = (
+            f"Resized image {indexes[0] + 1}"
+            if len(indexes) == 1
+            else f"Resized {len(indexes)} images"
+        )
+        changes = [r.get("change") for r in reports if r.get("change")]
+        if changes:
+            message += f" ({'; '.join(changes)})"
+        multi = [r for r in reports if r.get("placements", 1) > 1]
+        if multi:
+            message += (
+                f". {multi[0]['index'] + 1} is drawn in {multi[0]['placements']} "
+                "places, and all of them were resized."
+            )
+
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {
+                "$push": {"edit_history": {
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "action": f"Resized image(s) {', '.join(str(i + 1) for i in indexes)}",
+                }},
+                "$set": version_fields,
+            },
+        )
+
+        refreshed = await run_in_threadpool(
+            build_image_inventory, active_path, file_type
+        )
+
+        return {
+            "status": "success",
+            "action": "resize_image",
+            "resized": outcome["resized"],
+            "indexes": indexes,
+            "reports": outcome["reports"],
+            "message": message,
+            "images_version": datetime.now().isoformat(),
+            "images_count": len(refreshed),
+            "images": _public_inventory(refreshed),
+        }
+    except HTTPException:
+        raise
+    except ConnectionError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    except Exception as e:
+        logger.error("Error resizing document images: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error while resizing the image.")
+
+
+@router.get("/{doc_id}/versions")
+async def list_document_versions(
+    doc_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """The rollback timeline: the live document, every checkpoint, the original.
+
+    `edit_history` is prose and cannot be restored from; this is the list the
+    history panel renders so a mis-click has a way back.
+    """
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        timeline = await run_in_threadpool(list_versions, doc)
+        return {
+            "status": "success",
+            "count": len(timeline),
+            "versions": timeline,
+            "has_original": bool(
+                doc.get("original_storage_path") or not doc.get("has_edited_version")
+            ),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error listing document versions: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error while listing versions.")
+
+
+@router.post("/{doc_id}/versions/{version_id}/restore")
+async def restore_document_version(
+    doc_id: str,
+    version_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Make an earlier version the live document.
+
+    Non-destructive in both directions: the state being replaced is snapshotted
+    first, so a restore taken by mistake is itself on the timeline. The uploaded
+    original is never overwritten - a restore writes a fresh file and repoints
+    `storage_path`, exactly like any other edit.
+    """
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        try:
+            new_path = await run_in_threadpool(restore_version, db, doc, version_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except FileNotFoundError:
+            raise HTTPException(status_code=410, detail="That version's file is no longer available.")
+
+        images_count = doc.get("images_count", 0)
+        if doc["file_type"] in ("docx", "pdf"):
+            images_count = await run_in_threadpool(
+                _count_images, new_path, f".{doc['file_type']}"
+            )
+
+        entry = find_version(doc, version_id)
+        restored_label = entry.get("label") or "an earlier version"
+
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {
+                "$push": {"edit_history": {
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "action": f"Restored {restored_label}",
+                }},
+                "$set": {
+                    "storage_path": new_path,
+                    "has_edited_version": True,
+                    "images_count": images_count,
+                },
+            },
+        )
+
+        refreshed = await run_in_threadpool(list_versions, db.documents.find_one({"_id": ObjectId(doc_id)}))
+        return {
+            "status": "success",
+            "action": "restore_version",
+            "message": f"Restored {restored_label}.",
+            "images_version": datetime.now().isoformat(),
+            "images_count": images_count,
+            "versions": refreshed,
+        }
+    except HTTPException:
+        raise
+    except ConnectionError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    except Exception as e:
+        logger.error("Error restoring document version: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error while restoring the version.")
+
+
 @router.post("/{doc_id}/content")
 async def update_document_content(
     doc_id: str,
@@ -982,7 +1548,7 @@ async def update_document_content(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        active_path, version_fields = ensure_edited_version(doc, db)
+        active_path, version_fields = ensure_edited_version(doc, db, action="Text edits")
         success = False
         
         if doc["file_type"] == "docx":
@@ -1075,7 +1641,7 @@ async def find_replace_document_text(
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        active_path, version_fields = ensure_edited_version(doc, db)
+        active_path, version_fields = ensure_edited_version(doc, db, action="Find & replace")
         matches_replaced = 0
         
         if doc["file_type"] == "docx":
@@ -1129,6 +1695,9 @@ async def ai_command_endpoint(
     For 'replace': returns variant groups for the user to select which to change.
     For 'header'/'footer': applies the change directly (only header/footer) and
     returns change info for highlighting.
+    For 'replace_image': resolves which image the phrase names and returns it,
+    so the client can upload the new file against a confirmed target. Nothing is
+    written here - this endpoint never mutates the document for an image swap.
     """
     try:
         db = db_conn.get_db()
@@ -1137,7 +1706,9 @@ async def ai_command_endpoint(
             raise HTTPException(status_code=404, detail="Document not found")
         
         file_path = storage_service.get_file_path(doc["storage_path"])
-        intent = await run_in_threadpool(understand_command, request.command)
+        intent = await run_in_threadpool(
+            understand_command, request.command, bool(request.has_image_upload)
+        )
         action = intent.get("action")
 
         if action == "replace":
@@ -1168,7 +1739,7 @@ async def ai_command_endpoint(
             new_text = (intent.get("new_text") or "").strip()
             if not new_text:
                 return {"status": "success", "action": "unknown", "engine": intent.get("engine"), "message": f"I couldn't tell what new {action} text you want."}
-            active_path, version_fields = ensure_edited_version(doc, db)
+            active_path, version_fields = ensure_edited_version(doc, db, action=f"AI {action} command")
             success = False
             # NOTE: these must stay keyword arguments. Passing the header/footer
             # text positionally landed it in `font_name`/`font_size`: the header
@@ -1202,6 +1773,28 @@ async def ai_command_endpoint(
                 "new_text": new_text,
                 "message": f"Changed the {action} to '{new_text}'.",
                 "changes": [{"paragraph": action.capitalize(), "old_text": "", "new_text": new_text}],
+            }
+
+        if action == "replace_image":
+            # The intent layer deliberately returns no index. Resolve the target
+            # here, against this document's real image list, so the client can
+            # show the user which picture is about to be replaced (or pick one)
+            # before it uploads anything.
+            if doc["file_type"] not in ("docx", "pdf"):
+                return {
+                    "status": "success", "action": "unknown",
+                    "engine": intent.get("engine"),
+                    "message": f"Image replacement isn't supported for .{doc['file_type']} files.",
+                }
+            resolution = await run_in_threadpool(
+                resolve_image_targets, request.command, file_path, doc["file_type"]
+            )
+            return {
+                "status": "success",
+                "action": "replace_image",
+                "engine": intent.get("engine"),
+                "intent": intent.get("intent"),
+                **resolution,
             }
 
         if action == "summarize":
@@ -1273,9 +1866,14 @@ async def ai_command_endpoint(
 
         if action == "generate_mcq":
             requested = intent.get("num_questions") or 5
-            source_text = await run_in_threadpool(
-                _document_text, file_path, doc["file_type"]
-            )
+            source_label = "whole document"
+            source_text = _explicit_text(request)
+            if source_text:
+                source_label = "provided text"
+            else:
+                source_text = await run_in_threadpool(
+                    _document_text, file_path, doc["file_type"]
+                )
             if not source_text:
                 return {
                     "status": "success",
@@ -1289,7 +1887,7 @@ async def ai_command_endpoint(
                 {"_id": ObjectId(doc_id)},
                 {"$push": {"edit_history": {
                     "date": current_date,
-                    "action": f"AI Generate MCQ ({result['engine']}): {result.get('requested')} requested"
+                    "action": f"AI Generate MCQ ({result['engine']}): {result.get('requested')} requested from {source_label}"
                 }}}
             )
             if not result.get("questions"):
@@ -1298,6 +1896,7 @@ async def ai_command_endpoint(
                     "action": "generate_mcq",
                     "intent": intent.get("intent"),
                     "engine": result.get("engine"),
+                    "source": source_label,
                     "message": result.get("message") or "Question generation is unavailable right now.",
                 }
             return {
@@ -1305,6 +1904,9 @@ async def ai_command_endpoint(
                 "action": "generate_mcq",
                 "intent": intent.get("intent"),
                 "engine": result["engine"],
+                # Without this the client renders "from undefined" in its
+                # "Generated N of M requested question(s) from X." notice.
+                "source": source_label,
                 "requested": result["requested"],
                 "questions": result["questions"],
                 "message": result["message"],
@@ -1374,7 +1976,7 @@ async def selective_replace_document_text(
         if not request.selected_variants:
             return {"status": "success", "matches_replaced": 0, "changes": []}
         
-        active_path, version_fields = ensure_edited_version(doc, db)
+        active_path, version_fields = ensure_edited_version(doc, db, action="Selective replace")
         if doc["file_type"] == "docx":
             result = await run_in_threadpool(
                 selective_replace_docx, active_path, active_path, request.find_text,
@@ -1622,10 +2224,11 @@ async def generate_document_mcq_endpoint(
             )
 
         return {
+            **result,
+            # After the spread, so the label this route computed always wins.
             "status": "success",
             "source": source_label,
             "characters": len(source_text),
-            **result,
         }
     except HTTPException:
         raise
@@ -1637,3 +2240,76 @@ async def generate_document_mcq_endpoint(
     except Exception as e:
         logger.error("Error in document generate-mcq endpoint: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error while generating questions.")
+
+
+@router.post("/{doc_id}/summary/export")
+async def export_document_summary(
+    doc_id: str,
+    request: SummaryExportRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Download a generated summary as txt, docx or pdf.
+
+    Takes the summary the client is already showing rather than regenerating it:
+    a second summarisation pass would hand back different wording, and the user
+    asked to keep the one they read.
+    """
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        if not (request.summary or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="There is no summary text to export. Generate a summary first.",
+            )
+
+        fmt = (request.format or "txt").lower().strip()
+        if fmt not in SUPPORTED_SUMMARY_FORMATS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported summary format '{request.format}'. Use one of: "
+                       f"{', '.join(SUPPORTED_SUMMARY_FORMATS)}.",
+            )
+
+        title = (request.title or doc.get("filename") or "Summary").strip()
+        payload = {
+            "summary": request.summary,
+            "key_points": request.key_points or [],
+            "source": request.source,
+            "engine": request.engine,
+            "characters": request.characters,
+        }
+
+        try:
+            data, filename, media_type = await run_in_threadpool(
+                build_summary_bytes, fmt, payload, title
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {"$push": {"edit_history": {
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "action": f"Exported summary as {fmt.upper()}"
+            }}}
+        )
+
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except ConnectionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )
+    except Exception as e:
+        logger.error("Error in document summary export endpoint: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error while exporting the summary.")

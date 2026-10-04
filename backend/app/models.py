@@ -73,6 +73,31 @@ class FindReplaceRequest(BaseModel):
 
 class AICommandRequest(BaseModel):
     command: str
+    # True when the client sent this command alongside an attached image. Tells
+    # the intent cascade that a picture is available to swap in, so "replace the
+    # logo" resolves to replace_image instead of a text replace of "the logo".
+    has_image_upload: Optional[bool] = False
+
+
+class ImageResizeItem(BaseModel):
+    # One resize, on the canonical image index space (the integer the editor
+    # already shows for the tile the user clicked).
+    index: int = Field(..., ge=0)
+    # At least one of width/height must be given; the writers reject an empty one
+    # with a readable message rather than silently doing nothing.
+    width: Optional[float] = Field(None, gt=0)
+    height: Optional[float] = Field(None, gt=0)
+    unit: str = "px"
+    # Default True: distorting a logo is rarely intended and is easy to miss in a
+    # thumbnail. False applies both dimensions exactly as given.
+    keep_aspect: bool = True
+    # Which point stays put when the box changes: "top_left" (a dragged corner)
+    # or "center" (a dialog that grows the picture about its middle).
+    anchor: str = "top_left"
+
+
+class ImageResizeRequest(BaseModel):
+    items: List[ImageResizeItem]
 
 class RewriteRequest(BaseModel):
     # Instruction like "Fix grammar", "Make it formal", "Simplify this text"
@@ -96,6 +121,23 @@ class SummarizeRequest(BaseModel):
     text: Optional[str] = None
     # Length hint: "brief" | "short" | "medium" | "detailed" | "one-paragraph"
     length: Optional[str] = None
+
+class SummaryExportRequest(BaseModel):
+    """Export a summary the client is already displaying.
+
+    The text comes back from the client rather than being regenerated: a summary
+    is a model output, so asking for it twice would produce two different
+    documents, and the user asked to save *this* one.
+    """
+    summary: str
+    key_points: List[str] = Field(default_factory=list)
+    # "txt" | "docx" | "pdf"
+    format: str = "txt"
+    source: Optional[str] = None
+    engine: Optional[str] = None
+    characters: Optional[int] = None
+    # Defaults to the document filename when omitted.
+    title: Optional[str] = None
 
 class GenerateMCQRequest(BaseModel):
     # How many questions to produce. Capped server-side by MCQ_MAX_QUESTIONS.
@@ -121,6 +163,18 @@ class HeaderFooterRequest(BaseModel):
     font_name: Optional[str] = None
     font_size: Optional[float] = None
     alignment: Optional[str] = "center" # "left", "center", "right"
+    # Left/right page variants. Odd pages are the right-hand (1st, 3rd, ...) pages.
+    header_text_odd: Optional[str] = None
+    header_text_even: Optional[str] = None
+    footer_text_odd: Optional[str] = None
+    footer_text_even: Optional[str] = None
+    # A separate first page, for a cover sheet or a title page with no furniture.
+    header_text_first: Optional[str] = None
+    footer_text_first: Optional[str] = None
+    # Headers and footers are frequently aligned differently (title left, page
+    # number right), so each zone takes its own alignment.
+    header_alignment: Optional[str] = None
+    footer_alignment: Optional[str] = None
 
 class PipelineUpdateRequest(BaseModel):
     pipeline_stage: Optional[int] = None

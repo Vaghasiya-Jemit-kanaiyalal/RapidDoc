@@ -11,8 +11,13 @@ component fails:
 Command understanding:
     understand_command()  -> {"action": "replace", "find_text", "replace_text"}
                            or {"action": "header"|"footer", "new_text"}
+                           or {"action": "replace_image"}   (swap a picture for an upload)
                            or {"action": "summarize"|"generate_mcq", ...}
                            or {"action": "unknown"}
+
+    "replace_image" carries no index or filename by design. The target is
+    resolved by image_resolver.resolve_image_targets against the document's real
+    image list, which validates every number before anything is written.
 
 Generation:
     rewrite_text()        -> {"rewritten_text", "engine", "message"}
@@ -34,6 +39,7 @@ from RapidDoc.backend.app.services.local_models import (
     rewrite_text_locally,
     summarize,
 )
+from RapidDoc.backend.app.services.document_text import clean_prose, split_prose_sentences
 from RapidDoc.backend.app.services.mcq_generator import build_mcq_set
 from RapidDoc.backend.app.services.slot_extractor import extract_slots
 from RapidDoc.backend.app.services.text_polish import (
@@ -73,6 +79,16 @@ FALLBACK_MCQ_RE = re.compile(
 )
 _COUNT_RE = re.compile(r"\b(\d+)\b")
 
+# "replace the logo", "swap the image on page 2", "change the picture".
+# No target is captured on purpose: image_resolver.resolve_image_targets reads
+# the document's real image list, and a regex-captured number would bypass that
+# validation and could name an image that does not exist.
+FALLBACK_REPLACE_IMAGE_RE = re.compile(
+    r"\b(?:image|picture|photo|figure|diagram|logo|graphic|chart|icon|"
+    r"watermark|banner|thumbnail)\b",
+    re.IGNORECASE,
+)
+
 
 def _clean_find_text(value):
     """Drop filler words that accidentally get captured as the find text.
@@ -91,13 +107,22 @@ def _clean_find_text(value):
     return v.rstrip(" ,;:.").strip()
 
 
-def _fallback_intent(prompt: str) -> dict:
+def _fallback_intent(prompt: str, has_image_upload: bool = False) -> dict:
     m = FALLBACK_HEADER_RE.search(prompt)
     if m:
         return {"action": "header", "new_text": m.group(1).strip()}
     m = FALLBACK_FOOTER_RE.search(prompt)
     if m:
         return {"action": "footer", "new_text": m.group(1).strip()}
+
+    # Image intent is checked before the text-replace pattern because
+    # "replace the image on page 2 with this" matches FALLBACK_REPLACE_RE, and
+    # the text path would then look for the literal words "the image on page 2"
+    # in the document body. Requiring an uploaded image keeps this from firing on
+    # an ordinary phrasing like "replace the phrase 'image on page'".
+    if has_image_upload and FALLBACK_REPLACE_IMAGE_RE.search(prompt):
+        return {"action": "replace_image"}
+
     m = FALLBACK_REPLACE_RE.match(prompt)
     if m:
         return {
@@ -156,10 +181,16 @@ Supported actions:
    Example: "Change print to not print" -> {"action": "replace", "find_text": "print", "replace_text": "not print"}
 2. "header" — change ONLY the page header. Example: "Change the header to RapidDoc Report" -> {"action": "header", "new_text": "RapidDoc Report"}
 3. "footer" — change ONLY the page footer. Example: "Change the footer to CHARUSAT University" -> {"action": "footer", "new_text": "CHARUSAT University"}
+4. "replace_image" — the user wants to swap an embedded picture for a newly uploaded file.
+   Example: "Replace the image on page 2 with this" -> {"action": "replace_image"}
+   Example: "Change the logo" (an image is attached) -> {"action": "replace_image"}
 
 Rules:
 - For "replace", extract the exact literal substring to find and the exact replacement. Do not paraphrase.
 - If the instruction references a header/footer, return action "header" or "footer" and put the desired new text in "new_text". Never treat it as a body replace.
+- Use "replace_image" ONLY when the user is asking to change a picture. If an image file is attached to the message, that alone is enough signal.
+- Do NOT extract an image index, page number, or filename for "replace_image". The target is resolved separately against the document's actual image list, and a number you invent could silently replace the wrong picture. Return just {"action": "replace_image"}.
+- Distinguish carefully: "replace the image on page 2" is replace_image; "replace the word print with don't print" is a text replace.
 - If you cannot determine an action, return {"action": "unknown"}.
 
 Return strictly valid JSON with no markdown fences."""
@@ -223,20 +254,25 @@ def _gemini_client():
         return None
 
 
-def _understand_with_gemini(prompt: str):
+def _understand_with_gemini(prompt: str, has_image_upload: bool = False):
     model = _gemini_client()
     if model is None:
         return None
     try:
+        hint = (
+            "\n\nNote: the user has attached an image file with this instruction."
+            if has_image_upload
+            else ""
+        )
         m = model.generate_content(
-            f"{INTENT_PROMPT}\n\nUser instruction: {prompt}",
+            f"{INTENT_PROMPT}{hint}\n\nUser instruction: {prompt}",
             generation_config={
                 "response_mime_type": "application/json",
                 "temperature": 0.0,
             },
         )
         intent = _parse_intent_from_json(m.text)
-        if intent.get("action") in ("replace", "header", "footer"):
+        if intent.get("action") in ("replace", "header", "footer", "replace_image"):
             logger.info("Gemini parsed command '%s' as %s", prompt, intent)
             intent["engine"] = "gemini"
             return intent
@@ -357,15 +393,29 @@ def _local_intent_to_response(prompt: str, intent: str) -> dict:
     return None
 
 
-def understand_command(prompt: str) -> dict:
+def understand_command(prompt: str, has_image_upload: bool = False) -> dict:
     """Understand a natural-language command.
 
     Tries the local DistilBERT intent brain first, then Gemini, then the
     regex rule engine. Returns a dict with the action schema.
+
+    ``has_image_upload`` tells the cascade that the user attached a picture.
+    An image swap is only meaningful with a file to swap in, so this flag is
+    what lets the regex tier recognise the intent - the local DistilBERT label
+    set has no image class, and Gemini is not guaranteed to be configured.
+    Without it, "replace the image" falls through to the text-replace tier,
+    which searches the document body for the literal phrase "the image".
     """
     prompt = (prompt or "").strip()
     if not prompt:
         return {"action": "unknown"}
+
+    # An attached image plus any image-ish wording is unambiguous, so answer it
+    # from the rules without consulting the local brain: it has no image class
+    # and would otherwise steer the request toward a text replace.
+    if has_image_upload and FALLBACK_REPLACE_IMAGE_RE.search(prompt):
+        logger.info("Image upload + image wording '%s' -> replace_image (regex)", prompt)
+        return {"action": "replace_image", "engine": "regex"}
 
     # 1) Local fine-tuned intent brain -------------------------------------
     local = classify_intent(prompt)
@@ -392,12 +442,12 @@ def understand_command(prompt: str) -> dict:
         )
 
     # 2) Gemini fallback ----------------------------------------------------
-    gemini_intent = _understand_with_gemini(prompt)
+    gemini_intent = _understand_with_gemini(prompt, has_image_upload)
     if gemini_intent:
         return gemini_intent
 
     # 3) Deterministic regex engine -----------------------------------------
-    fallback = _fallback_intent(prompt)
+    fallback = _fallback_intent(prompt, has_image_upload)
     fallback.setdefault("engine", "regex")
     return fallback
 
@@ -795,6 +845,30 @@ def _rank_sentences(sentences: list, text: str) -> list:
     return ranked
 
 
+def _sentence_key(sent: str) -> str:
+    """Comparison key that ignores case, spacing and trailing punctuation."""
+    return re.sub(r"[^a-z0-9 ]", "", (sent or "").lower()).strip()
+
+
+def _topup_sentences(text: str, conclusion_sents: list) -> list:
+    """Body sentences that may extend a conclusion-based summary.
+
+    Prose only, headings removed, and nothing already in the conclusion - a
+    top-up that repeats the conclusion is worse than a short summary.
+    """
+    seen = {_sentence_key(s) for s in conclusion_sents}
+    pool = []
+    for sent in split_prose_sentences(text, split_sentences):
+        if _is_heading(sent):
+            continue
+        key = _sentence_key(sent)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        pool.append(sent)
+    return pool
+
+
 def _conclusion_summary(sentences: list, text: str, max_tokens, topup: list = None) -> str:
     """Fit the conclusion to the requested length instead of dumping all of it.
 
@@ -810,10 +884,13 @@ def _conclusion_summary(sentences: list, text: str, max_tokens, topup: list = No
     def _collect(pool, offset, out, used):
         # `offset` keeps the conclusion's own sentences ahead of any body top-up,
         # so the summary still leads with what the report concluded.
+        chosen_keys = {_sentence_key(existing) for _, existing in out}
         for _, idx, sent in _rank_sentences(pool, text):
             candidate = _strip_opener(sent)
-            if any(candidate == existing for _, existing in out):
+            key = _sentence_key(candidate)
+            if not key or key in chosen_keys:
                 continue
+            chosen_keys.add(key)
             if used + len(candidate) + 1 > budget and out:
                 continue
             out.append((offset + idx, candidate))
@@ -835,9 +912,11 @@ def _conclusion_summary(sentences: list, text: str, max_tokens, topup: list = No
     # the budget.
     if topup and used < budget and budget >= 300:
         slack = budget + budget // 4
+        chosen_keys = {_sentence_key(existing) for _, existing in chosen}
         spare = [(_strip_opener(s), i) for i, s in enumerate(topup)]
         spare = [(c, i) for c, i in spare
-                 if not any(c == existing for _, existing in chosen) and len(c) + used <= slack]
+                 if _sentence_key(c) and _sentence_key(c) not in chosen_keys
+                 and len(c) + used <= slack]
         if spare:
             candidate, i = min(spare, key=lambda pair: len(pair[0]))
             chosen.append((len(sentences) + 1 + i, candidate))
@@ -855,7 +934,10 @@ def summarize_document(text: str, length_hint=None) -> dict:
     Returns {"summary", "engine", "message"}. `summary` is None when no engine
     could handle the text, so the caller can return a clean 503.
     """
-    text = (text or "").strip()
+    # A notebook or a code-heavy practical is mostly source. Summarising that
+    # verbatim produced paragraphs made of `df.shape` and `plt.title(...)`, so the
+    # code comes out first and the summariser only ever sees what a human wrote.
+    text = clean_prose((text or "").strip())
     if not text:
         return {
             "summary": None,
@@ -879,9 +961,13 @@ def summarize_document(text: str, length_hint=None) -> dict:
             # Anything in the report body that is not already part of the
             # conclusion can top the summary up when the conclusion alone is
             # smaller than the requested length.
-            conclusion_set = {s.strip() for s in conclusion_sents}
-            topup = [s for s in split_sentences(text)
-                     if s.strip() and s.strip() not in conclusion_set]
+            #
+            # The pool is built from prose sentences only. Feeding it raw
+            # `split_sentences(text)` output welded each heading onto the sentence
+            # under it, so a summary read
+            #   "...churn model. Introduction to EDA The Telco dataset contains..."
+            # and then repeated a conclusion sentence it was supposed to exclude.
+            topup = _topup_sentences(text, conclusion_sents)
             clean = _conclusion_summary(conclusion_sents, text, max_tokens, topup)
             clean = _validated_summary(clean, text) if clean else ""
             if clean:
@@ -1062,7 +1148,9 @@ def generate_mcqs(text: str, count: int = 5) -> dict:
 
     Returns {"questions": [...], "requested", "engine", "message"}.
     """
-    text = (text or "").strip()
+    # Question stems are built from document sentences; a stem made of source code
+    # is unanswerable, so the code is removed before the builder sees the text.
+    text = clean_prose((text or "").strip())
     try:
         count = int(count)
     except (TypeError, ValueError):

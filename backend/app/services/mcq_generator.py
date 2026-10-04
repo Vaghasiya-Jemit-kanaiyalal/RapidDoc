@@ -127,6 +127,81 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
+# A report's table cells split sentences across rows, so a line can end on a word
+# that promises a continuation. Left alone this produced stems like
+# "Objective To set up a ____ development environment using Vite and build a
+# static UI using" - the blank landed where the sentence had not finished.
+_DANGLING_TAIL = frozenset("""
+a an the and or but so of in on at to for from by with without into onto over
+under through between among across per via than then that which who whom whose
+when where while because since although though if unless until as is are was
+were be been being am has have had do does did will would shall should can could
+may might must its their our your my this these those such other another each
+every some any both either neither also plus versus vs using use used include
+including add adding based
+""".split())
+
+# The label cell of a table row arrives glued to the first line of its value:
+# "Objective To set up a React development environment...". These are the labels
+# AWDF-style reports actually use, so they are listed rather than guessed at.
+_ROW_LABEL = re.compile(
+    r"^(?:objective|aim|goal|task|requirement|requirements|deliverable|deliverables|"
+    r"problem|problem\s+statement|statement|pre-?requirement|pre-?requisite|"
+    r"technology|note|note\s+s|about|background|context|summary|result|results|"
+    r"conclusion|introduction|description|instruction|instructions|step|steps)\s+",
+    re.IGNORECASE,
+)
+
+
+def _strip_row_label(sentence: str) -> str:
+    """Remove a leading table-label word from the front of a sentence."""
+    stripped = _ROW_LABEL.match(sentence or "")
+    if not stripped:
+        return sentence
+    rest = sentence[stripped.end():]
+    # Only drop the label when real prose follows, never when that would empty
+    # the sentence or leave a fragment.
+    return rest if len(rest.split()) >= 5 else sentence
+
+
+def _join_continuations(lines: list) -> list:
+    """Re-attach a line that stops on a word demanding a continuation.
+
+    Only a dangling final word triggers the join. Joining every unterminated line
+    would weld a page footer onto the first heading of the next block, because
+    furniture lines also lack a full stop. A blank line ends the paragraph and
+    cancels the join.
+    """
+    joined = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            joined.append(line)
+            continue
+
+        # The nearest preceding non-blank line inside the same paragraph.
+        previous = None
+        index = None
+        for i in range(len(joined) - 1, -1, -1):
+            if joined[i].strip():
+                previous, index = joined[i].strip(), i
+                break
+            break  # a blank line ends the paragraph
+
+        if previous and index is not None:
+            last = previous.split()[-1].lower().strip(".,;:()[]")
+            if (
+                last in _DANGLING_TAIL
+                and not _is_code_like(previous)
+                and not _is_code_like(stripped)
+            ):
+                joined[index] = f"{joined[index].rstrip()} {stripped}"
+                continue
+
+        joined.append(line)
+    return joined
+
+
 # Source lines that are code, shell commands or file trees. They are excellent
 # material for a code slide and useless as quiz content, and left in the pool
 # they produce questions like "Which is NOT a command: src/ or Vite?".
@@ -157,9 +232,9 @@ def sentences_of(text: str, min_words: int = 6, max_words: int = 90) -> list:
     questions and distractors.
     """
     out = []
-    for block in re.split(r"[\n\r]+", text or ""):
-        for raw in _SENTENCE_SPLIT.split(block):
-            s = _clean(raw)
+    for line in _join_continuations((text or "").split("\n")):
+        for raw in _SENTENCE_SPLIT.split(line):
+            s = _strip_row_label(_clean(raw))
             words = s.split()
             if not (min_words <= len(words) <= max_words):
                 continue
@@ -322,6 +397,34 @@ def _q(stem: str, answer: str, distractors: list, kind: str, source: str) -> dic
 _TITLE_LIKE = re.compile(r"^[^:]{1,60}[:\-–]\s*\S")
 
 
+# An instruction, not a subject. "Create" opened a sentence in most practical
+# reports, so the question became '...connected with "Create"?', which no
+# student could answer from the document.
+_IMPERATIVE_VERBS = frozenset("""
+create add build write implement design develop set use ensure define run
+install configure generate perform apply display print include initialize make
+take give allow provide check select choose insert update remove delete replace
+compose render draw show list load save open close start stop
+""".split())
+
+
+def _usable_cue(candidate: str, start: int, all_text: str) -> bool:
+    """Whether a capitalised word can be the subject of an association question."""
+    text = candidate.strip()
+    if not text:
+        return False
+    # A shouted logo or institution mark carries nothing worth being asked about.
+    if text.isupper() and len(text) > 3:
+        return False
+    if start == 0 and text.lower() in _IMPERATIVE_VERBS:
+        return False
+    # A name used exactly once is an author's name or a stray proper noun, not a
+    # concept the document develops.
+    if " " not in text and all_text.count(text.lower()) < 2:
+        return False
+    return True
+
+
 def _is_title_like(sent: str) -> bool:
     """A heading is not quiz material - blanking a word out of one is nonsense."""
     return bool(_TITLE_LIKE.match(sent))
@@ -375,12 +478,15 @@ def gen_association(sentences, terms, vocabulary, rotate):
     distractors come from elsewhere in the document, so only one is defensible.
     """
     key_set = {_normalize_option(t) for t in terms}
+    all_text = " ".join(sentences).lower()
     for idx, sent in enumerate(sentences):
         if _is_title_like(sent):
             continue
         cue = None
         for m in re.finditer(r"\b([A-Z][\w-]{3,}(?:[ ][A-Z][\w-]{3,}){0,2})\b", sent):
             candidate = m.group(1)
+            if not _usable_cue(candidate, m.start(), all_text):
+                continue
             if _normalize_option(candidate) in vocabulary and not _is_code_like(candidate):
                 cue = candidate
                 break

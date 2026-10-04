@@ -28,13 +28,26 @@ from RapidDoc.backend.app.services.pdf_editor import (
 
 
 def band_text(page, which):
-    """All text a header/footer band should be judged on."""
+    """All text a header/footer band should be judged on.
+
+    Deliberately a plain clipped read with whitespace squeezed, not the
+    production extractor. It is an independent check: if the two agree, the
+    structured reader is describing what is genuinely on the page rather than
+    agreeing with itself. Note it cannot see columns - two spans on one line come
+    back space-joined here and tab-joined by ``hf.band_text``, which is expected
+    and why the column tests assert on ``hf.band_text``.
+    """
     rect = hf.band_rect(page, which)
     if which == "footer":
         rect = fitz.Rect(0, rect.y0 - 20, page.rect.width, page.rect.height)
     else:
         rect = fitz.Rect(0, 0, page.rect.width, rect.y1 + 20)
     return " ".join(page.get_text("text", clip=rect).split())
+
+
+def structured_band_text(page, which, page_number=1, page_count=1):
+    """What the editor is shown: one string per band, columns tab-separated."""
+    return hf.band_text(page, which, page_number, page_count)
 
 
 def full_text(page):
@@ -291,10 +304,19 @@ def test_pdf_reader_reports_odd_even_variants(pdf_with_headers):
 
 
 def test_pdf_reader_keeps_headers_and_footers_keys(pdf_with_headers):
-    """The editor still expects the flat lists."""
+    """The editor still expects the flat lists, tab-separated within an entry.
+
+    The lists stay flat because that is what the editor indexes into, but the two
+    halves of a band must not be glued together: flattening them with spaces is
+    what made the editor show one string and then rewrite the ID into the middle
+    of the page instead of flush right.
+    """
     info = get_pdf_headers_footers(pdf_with_headers)
-    assert info["headers"] == ["Subject: Old Subject   ID: 0000"]
-    assert info["footers"] == ["DEPSTAR   1", "DEPSTAR   2", "DEPSTAR   3", "DEPSTAR   4"]
+    assert info["headers"] == ["Subject: Old Subject\tID: 0000"]
+    assert info["footers"] == ["DEPSTAR\t{PAGE}"]
+    # One footer, not four: the differing digit is a page number, not four
+    # different footers, and reporting four put the editor in side-specific mode.
+    assert info["different_odd_even"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -542,13 +564,14 @@ def test_blank_variants_do_not_erase_the_header(pdf_with_headers):
 
     ``spec_from_legacy`` used to pass an empty string straight through, so the
     writer erased the band and then declined to write anything, because there was
-    no text left to render.
+no text left to render.
     """
     spec = hf.spec_from_legacy(header_text="", header_odd="", header_even="")
     doc = fitz.open(pdf_with_headers)
     try:
         hf.apply_pdf_headers_footers(doc, spec)
         assert band_text(doc[0], "header") == "Subject: Old Subject ID: 0000"
+        assert structured_band_text(doc[0], "header") == "Subject: Old Subject\tID: 0000"
     finally:
         doc.close()
 
@@ -567,6 +590,7 @@ def test_whitespace_only_text_is_treated_as_absent(pdf_with_headers):
     try:
         hf.apply_pdf_headers_footers(doc, spec)
         assert band_text(doc[0], "footer") == "DEPSTAR 1"
+        assert structured_band_text(doc[0], "footer") == "DEPSTAR\t{PAGE}"
     finally:
         doc.close()
 
@@ -597,6 +621,158 @@ def test_a_header_too_long_for_its_band_leaves_the_old_one_alone(pdf_with_header
     apply_pdf(pdf_with_headers, header_text="X" * 4000, font_size=24)
 
     assert _full_bands(pdf_with_headers) == before
+
+
+# ---------------------------------------------------------------------------
+# Two columns on one line
+# ---------------------------------------------------------------------------
+
+def test_two_column_header_survives_a_round_trip(pdf_with_headers):
+    """A left and a right half must stay two halves, not become one string."""
+    doc = fitz.open(pdf_with_headers)
+    try:
+        assert structured_band_text(doc[0], "header") == "Subject: Old Subject\tID: 0000"
+        assert structured_band_text(doc[0], "footer") == "DEPSTAR\t{PAGE}"
+    finally:
+        doc.close()
+
+
+def test_two_column_text_is_written_as_two_columns(pdf_with_headers):
+    apply_pdf(pdf_with_headers, header_text="Subject: New\tID: 0001")
+
+    doc = fitz.open(pdf_with_headers)
+    try:
+        page = doc[0]
+        assert structured_band_text(page, "header") == "Subject: New\tID: 0001"
+
+        # The right half has to end on the same right edge the original did,
+        # not float wherever the text happens to stop.
+        spans = hf.zone_spans(page, hf.band_rect(page, "header"), "header")
+        right = max(fitz.Rect(s["bbox"]).x1 for s in spans)
+        assert right == pytest.approx(464.0, abs=2.0)
+    finally:
+        doc.close()
+
+
+def test_a_single_unbreakable_word_does_not_wrap_out_of_the_band(pdf_with_headers):
+    """A long filename has no spaces to break on, so it used to overflow.
+
+    ``insert_textbox`` reports success even when it silently wraps onto a second
+    line. That second line fell below the band and was clipped, so the header came
+    back missing its last character. The replacement now shrinks to fit instead.
+    """
+    apply_pdf(pdf_with_headers, header_text="Practical2_AWDF_24DCS140.pdf")
+
+    doc = fitz.open(pdf_with_headers)
+    try:
+        text = structured_band_text(doc[0], "header")
+        assert text == "Practical2_AWDF_24DCS140.pdf"
+
+        page = doc[0]
+        rect = hf.band_rect(page, "header")
+        rows = hf.band_rows(hf.zone_spans(page, rect, "header"))
+        assert len(rows) == 1, "the header wrapped onto a second line"
+    finally:
+        doc.close()
+
+
+def test_the_replacement_keeps_the_documents_text_column(pdf_with_headers):
+    """Not 8pt from the paper edge: aligned to where the body already is.
+
+    A single centred section starts wherever centring puts it, so this asks for
+    left alignment to pin the column itself down.
+    """
+    apply_pdf(
+        pdf_with_headers,
+        header_text="A new header",
+        footer_text="A new footer",
+        header_alignment="left",
+        footer_alignment="left",
+    )
+
+    doc = fitz.open(pdf_with_headers)
+    try:
+        page = doc[0]
+        for which in ("header", "footer"):
+            spans = hf.zone_spans(page, hf.band_rect(page, which), which)
+            assert spans, f"{which} went missing"
+            left = min(fitz.Rect(s["bbox"]).x0 for s in spans)
+            assert left == pytest.approx(60.0, abs=2.0), which
+    finally:
+        doc.close()
+
+
+def test_a_two_column_header_spans_the_full_text_column(pdf_with_headers):
+    """The left half starts at the margin, the right half ends at the old right edge."""
+    apply_pdf(pdf_with_headers, header_text="Left half\tRight half")
+
+    doc = fitz.open(pdf_with_headers)
+    try:
+        spans = hf.zone_spans(doc[0], hf.band_rect(doc[0], "header"), "header")
+        assert len(spans) == 2
+        left = min(fitz.Rect(s["bbox"]).x0 for s in spans)
+        right = max(fitz.Rect(s["bbox"]).x1 for s in spans)
+        assert left == pytest.approx(60.0, abs=2.0)
+        assert right == pytest.approx(464.0, abs=2.0)
+    finally:
+        doc.close()
+
+
+def test_typography_is_inherited_when_the_caller_names_no_font(pdf_with_headers):
+    """Changing the words must not also change how they look.
+
+    The editor sends no font unless the user picks one, so a Times bold header
+    used to come back as small grey Helvetica - a downgrade nobody asked for.
+    """
+    before = fitz.open(pdf_with_headers)
+    try:
+        original = hf.read_pdf_headers_footers(before)["header_style"]
+    finally:
+        before.close()
+
+    apply_pdf(pdf_with_headers, header_text="Still the same look")
+
+    after = fitz.open(pdf_with_headers)
+    try:
+        assert hf.read_pdf_headers_footers(after)["header_style"] == original
+    finally:
+        after.close()
+
+
+def test_an_explicit_font_still_overrides(pdf_with_headers):
+    apply_pdf(pdf_with_headers, header_text="Override", font_name="Courier New")
+
+    doc = fitz.open(pdf_with_headers)
+    try:
+        style = hf.read_pdf_headers_footers(doc)["header_style"]
+        assert style["font"] == "Courier New"
+    finally:
+        doc.close()
+
+
+def test_typographic_characters_are_not_corrupted_into_question_marks(pdf_with_headers):
+    """A base-14 PDF font cannot draw an en dash, and PyMuPDF wrote '?' instead.
+
+    The save reported success while quietly replacing the dash on every page, so
+    the difference has to be made deliberately, not by accident.
+    """
+    apply_pdf(pdf_with_headers, footer_text="DEPSTAR \u2013 Campus")
+
+    doc = fitz.open(pdf_with_headers)
+    try:
+        text = band_text(doc[0], "footer")
+        assert "?" not in text
+        assert "DEPSTAR" in text and "Campus" in text
+    finally:
+        doc.close()
+
+
+def test_one_footer_is_not_mistaken_for_four_different_footers(pdf_with_headers):
+    """A changing page number is not a difference between left and right pages."""
+    info = get_pdf_headers_footers(pdf_with_headers)
+    assert len(info["footers"]) == 1
+    assert info["footer_odd"] == info["footer_even"]
+    assert info["different_odd_even"] is False
 
 
 def test_a_taller_header_still_renders_over_the_old_one(pdf_with_headers):

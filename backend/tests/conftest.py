@@ -203,11 +203,15 @@ def pdf_rotated_image(tmp_path):
 def pdf_with_headers(tmp_path):
     """A 4-page A4 PDF with a running header and footer on every page.
 
-    Both bands are positioned the way the AWDF reference document positions
-    them: the header straddles the nominal 45pt band (y 36-49) and the footer
-    straddles the bottom one. A test that only used neatly aligned furniture
-    would pass against the old white-rectangle writer, which is why the
-    straddling offsets are part of the fixture.
+    Modelled on the AWDF reference document: the header and footer each hold two
+    things on one line, separated by a real gap and positioned by real
+    coordinates - the subject on the left, the ID flush right; the college name
+    bottom left, the page number bottom right.
+
+    The columns have to be separate spans at separate x positions. An earlier
+    version of this fixture faked them with three literal spaces in one string,
+    which is not what a PDF produced by Word looks like, and testing against it
+    hid every bug in the two-column layout: nothing was ever actually two columns.
     """
     path = tmp_path / "headers.pdf"
     doc = fitz.open()
@@ -215,8 +219,10 @@ def pdf_with_headers(tmp_path):
         page = doc.new_page(width=595, height=842)
         page.insert_text((60, 90), f"Chapter {number}", fontsize=12)
         page.insert_text((60, 120), "Body text that must survive.", fontsize=10)
-        page.insert_text((60, 40), "Subject: Old Subject   ID: 0000", fontsize=9)
-        page.insert_text((60, 800), f"DEPSTAR   {number}", fontsize=9)
+        page.insert_text((60, 40), "Subject: Old Subject", fontsize=9)
+        page.insert_text((430, 40), "ID: 0000", fontsize=9)
+        page.insert_text((60, 800), "DEPSTAR", fontsize=9)
+        page.insert_text((530, 800), str(number), fontsize=9)
     doc.save(str(path))
     doc.close()
     return str(path)

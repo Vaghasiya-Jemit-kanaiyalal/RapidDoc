@@ -3,6 +3,7 @@ import { downloadDocument, downloadFormats } from '../../utils/download';
 import { API_URL, getAuthHeaders, isAuthExpired } from '../../utils/api';
 import laodingEffect from '../../assets/laoding_effect.png';
 import { HeaderFooterEditor } from './HeaderFooterEditor';
+import { ImageResizeDialog } from './ImageResizeDialog';
 import { PipelineStepper } from './PipelineStepper';
 import { useEditHistory, useUndoRedoShortcuts } from '../../hooks/useEditHistory';
 import { DocumentSkeleton, PreviewSkeleton } from './EditorSkeletons';
@@ -10,7 +11,7 @@ import {
   FileText, Download, ChevronDown,
   RefreshCw, AlertTriangle, Save, Loader2, CheckCircle2,
   Send, ZoomIn, X, Wand2, History, ArrowRight, FileSignature, ArrowLeft,
-  Sparkles, ListOrdered, Copy, Undo2, Redo2
+  Sparkles, ListOrdered, Copy, Undo2, Redo2, ImageIcon, Paperclip, Ruler
 } from 'lucide-react';
 
 const AI_STATUSES = [
@@ -30,6 +31,13 @@ const PPTX_THEMES = [
   { id: 'modern', label: 'Modern', hint: 'Blue accent, white slides' },
   { id: 'corporate', label: 'Corporate', hint: 'Teal accent, clean layout' },
   { id: 'minimal', label: 'Minimal', hint: 'Greyscale, high contrast' },
+];
+
+/** Summary export formats, matching what the server's summary_export accepts. */
+const SUMMARY_FORMATS = [
+  { value: 'txt', label: 'TXT' },
+  { value: 'docx', label: 'DOCX' },
+  { value: 'pdf', label: 'PDF' },
 ];
 
 /** Header/footer field codes the editor can insert, e.g. `PAGE`, `DATE`, `TITLE`. */
@@ -191,8 +199,13 @@ const normalizeEdits = (edits) => {
  * The bytes live behind an authenticated endpoint, so a plain <img src> would
  * come back as the login payload. Fetching to a blob and revoking it on unmount
  * keeps the image request authorized without leaking object URLs.
+ *
+ * `version` is part of the effect deps on purpose: the endpoint is keyed by
+ * index, so after a replacement the URL is unchanged and the browser would serve
+ * the pre-edit bytes from its cache. Bumping `version` is what makes the swap
+ * actually visible.
  */
-const DocumentImage = ({ docId, index, maxHeight = 220, alt, className = '' }) => {
+const DocumentImage = ({ docId, index, maxHeight = 220, alt, className = '', version }) => {
   const [url, setUrl] = useState('');
   const [failed, setFailed] = useState(false);
   const urlRef = useRef('');
@@ -206,6 +219,7 @@ const DocumentImage = ({ docId, index, maxHeight = 220, alt, className = '' }) =
       try {
         const res = await fetch(`${API_URL}/documents/${docId}/images/${index}`, {
           headers: getAuthHeaders(),
+          cache: 'no-store',
         });
         if (!res.ok) throw new Error('image request failed');
         const blob = await res.blob();
@@ -225,7 +239,7 @@ const DocumentImage = ({ docId, index, maxHeight = 220, alt, className = '' }) =
         urlRef.current = '';
       }
     };
-  }, [docId, index]);
+  }, [docId, index, version]);
 
   if (failed) {
     return (
@@ -250,6 +264,71 @@ const DocumentImage = ({ docId, index, maxHeight = 220, alt, className = '' }) =
       style={{ maxHeight: `${maxHeight}px` }}
       className={`mx-auto object-contain rounded-lg ${className}`}
     />
+  );
+};
+
+/**
+ * One image in the document stream, with the double-click-to-replace affordance.
+ *
+ * Kept as its own component so the hover overlay and the double-click handler
+ * exist in one place for both the DOCX and PDF render paths, which are otherwise
+ * near-identical for images and would drift apart.
+ */
+const EditableImageBlock = ({ docId, index, caption, alt, maxHeight, version, onRequestReplace, onRequestResize, replacing }) => {
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <div
+      className="my-3 bg-white border border-slate-100 rounded-lg p-2.5 group/image relative"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onDoubleClick={() => { if (!replacing) onRequestReplace(index); }}
+      title="Double-click to replace this image"
+    >
+      <DocumentImage
+        docId={docId}
+        index={index}
+        maxHeight={maxHeight}
+        alt={alt}
+        version={version}
+      />
+      <span className="mt-1.5 inline-block text-[7px] font-bold text-slate-400 uppercase bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">
+        {caption}
+      </span>
+
+      {/* Hover actions. Hidden from touch, where there is no double-click. */}
+      {hovered && !replacing && (
+        <div className="absolute top-3 right-3 flex items-center gap-1.5 opacity-0 group-hover/image:opacity-100 focus-within:opacity-100 transition pointer-events-none group-hover/image:pointer-events-auto">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRequestResize(index); }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md bg-white/95 border border-slate-200 text-slate-600 text-[9px] font-bold uppercase tracking-wide hover:bg-blue-50 hover:text-blue-600 transition"
+            tabIndex={-1}
+          >
+            <Ruler className="w-3 h-3" />
+            Resize
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRequestReplace(index); }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md bg-slate-900/85 text-[9px] font-bold uppercase tracking-wide text-white hover:bg-slate-900 transition"
+            tabIndex={-1}
+          >
+            <ImageIcon className="w-3 h-3" />
+            Replace
+          </button>
+        </div>
+      )}
+
+      {replacing && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white/70 rounded-lg">
+          <span className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-600">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            Replacing…
+          </span>
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -397,6 +476,31 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   const [rewritingIndex, setRewritingIndex] = useState(null);
   const [rewriteBusy, setRewriteBusy] = useState(false);
 
+  // Image replacement state. `imagesVersion` is bumped after a successful swap
+  // so every <DocumentImage> refetches - the image endpoint is keyed by index,
+  // so without it the browser keeps serving the pre-edit bytes from cache.
+  const [imagesVersion, setImagesVersion] = useState(0);
+  const [replacingImageIndex, setReplacingImageIndex] = useState(null);
+  const [imageReplaceNotice, setImageReplaceNotice] = useState(null); // {tone, text}
+  // The index a pending file picker is targeting, and the prompt-bar attachment.
+  const pendingImageIndexRef = useRef(null);
+  const imagePickInputRef = useRef(null);
+  const [promptImage, setPromptImage] = useState(null); // {file, previewUrl}
+  const promptImageInputRef = useRef(null);
+
+  // Resizing needs the server's drawn size (a PDF stores pixel data that says
+  // nothing about how big the picture prints), so the dialog is fed from
+  // GET /images rather than from whatever the tile happens to show.
+  const [imageInventory, setImageInventory] = useState([]);
+  const [resizeTarget, setResizeTarget] = useState(null); // the chosen inventory entry
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+
+  // Rollback timeline. `edit_history` below is prose; these are the entries that
+  // hold file bytes, which is what makes a restore possible.
+  const [versions, setVersions] = useState([]);
+  const [restoringVersion, setRestoringVersion] = useState(null);
+  const [versionError, setVersionError] = useState('');
+
   // AI Assistant state
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiProcessing, setAiProcessing] = useState(false);
@@ -409,6 +513,11 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   const [aiReplaceText, setAiReplaceText] = useState('');
   const [aiChanges, setAiChanges] = useState([]); // [{paragraph, index, old_text, new_text}]
   const [aiSummary, setAiSummary] = useState(null); // {summary, source, engine, length}
+
+  // Summary exports. The text is whatever is on screen, so what is downloaded is
+  // what the user read.
+  const [summaryExporting, setSummaryExporting] = useState(null);
+  const [summaryExportError, setSummaryExportError] = useState('');
   const [aiQuestions, setAiQuestions] = useState(null); // {questions, requested, engine}
   // Interactive quiz state. `quizPicks` maps question index -> chosen letter;
   // a question is only revealed once it has been answered.
@@ -551,7 +660,10 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || 'Failed to fetch content');
+        // FastAPI puts the text in `detail`; the hand-built 409 ambiguous-target
+        // body uses `message`. Reading only `detail` turned "Page 1 has 2 images.
+        // Which one should I replace?" into a generic failure.
+        throw new Error(data.detail || data.message || 'The image could not be replaced.');
       }
       setContent(data.content);
       // Tables and images are additive fields; an older backend simply omits
@@ -578,6 +690,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           return String(v);
         };
         setHeaderFooter({
+          ...data,
           headers: (data.headers || []).map(toText),
           footers: (data.footers || []).map(toText)
         });
@@ -635,6 +748,55 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     } finally {
       setDownloading('');
       setDownloadStage('');
+    }
+  };
+
+  /**
+   * Download the summary currently on screen.
+   *
+   * The blob is saved through an object URL rather than a plain link so the
+   * filename can come from the server's Content-Disposition header - a generated
+   * one would not match what the export route decided to call it.
+   */
+  const handleExportSummary = async (format) => {
+    if (!aiSummary?.summary) return;
+    setSummaryExporting(format);
+    setSummaryExportError('');
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/summary/export`, {
+        method: 'POST',
+        headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: aiSummary.summary,
+          key_points: aiSummary.key_points || [],
+          source: aiSummary.source,
+          engine: aiSummary.engine,
+          characters: aiSummary.characters,
+          title: doc.name?.replace(/\.[^/.]+$/, '') || 'Summary',
+          format,
+        }),
+      });
+      if (isAuthExpired(res)) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || 'The summary could not be exported.');
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${(doc.name || 'document').replace(/\.[^/.]+$/, '')}-summary.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setSummaryExportError(err.message || 'The summary could not be exported.');
+    } finally {
+      setSummaryExporting(null);
     }
   };
 
@@ -737,10 +899,225 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     }
   };
 
+  /**
+   * Double-click / hover "Replace" on an image: remember which one, then open
+   * the OS file picker. The chosen index lives in a ref rather than state
+   * because it is only read once, inside the change handler.
+   */
+  const requestImageReplace = (index) => {
+    if (replacingImageIndex !== null) return;
+    pendingImageIndexRef.current = index;
+    imagePickInputRef.current?.click();
+  };
+
+  /**
+   * Hover "Resize" on an image: open the sizing dialog with the server's own
+   * numbers. The inventory is fetched on demand and cached, because the drawn
+   * size changes as soon as a resize is applied - it is dropped at the same time
+   * `imagesVersion` is bumped.
+   */
+  const requestImageResize = async (index) => {
+    const cached = imageInventory.find((img) => img.index === index);
+    if (cached) {
+      setResizeTarget(cached);
+      return;
+    }
+    // Two quick hovers would otherwise fire two identical inventory requests.
+    if (inventoryLoading) return;
+
+    setInventoryLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/images`, {
+        headers: getAuthHeaders(),
+      });
+      if (isAuthExpired(res)) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'The image list could not be loaded.');
+      }
+      const images = data.images || [];
+      setImageInventory(images);
+      const target = images.find((img) => img.index === index);
+      if (!target) throw new Error('That image is no longer in this document.');
+      setResizeTarget(target);
+    } catch (err) {
+      setImageReplaceNotice({ tone: 'error', text: err.message || 'The image could not be opened for resizing.' });
+    } finally {
+      setInventoryLoading(false);
+    }
+  };
+
+  /**
+   * Load the rollback timeline. Cheap enough to refetch after every edit, and
+   * doing so is what keeps the list honest - a restore rewrites the timeline.
+   */
+  const loadVersions = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/versions`, {
+        headers: getAuthHeaders(),
+      });
+      if (isAuthExpired(res)) return;
+      const data = await res.json();
+      if (res.ok) setVersions(data.versions || []);
+    } catch {
+      // A missing timeline must not take the editor down with it.
+    }
+  }, [doc.id]);
+
+  useEffect(() => { loadVersions(); }, [loadVersions]);
+
+  const handleRestoreVersion = async (version) => {
+    const id = version.is_original ? 'original' : version.version_id;
+    setRestoringVersion(id);
+    setVersionError('');
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/versions/${id}/restore`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (isAuthExpired(res)) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'That version could not be restored.');
+      }
+      setVersions(data.versions || []);
+      // The restored file is a different document: every tile, the preview and
+      // the cached edit log all have to come back from the server.
+      setImagesVersion((v) => v + 1);
+      setImageInventory([]);
+      setImageReplaceNotice({ tone: 'success', text: data.message || 'Version restored.' });
+      setSavedEdits({});
+      setPendingEdits({});
+      setAiChanges([]);
+      await refreshDoc();
+      refreshFullPreview();
+    } catch (err) {
+      setVersionError(err.message || 'That version could not be restored.');
+    } finally {
+      setRestoringVersion(null);
+    }
+  };
+
+  /** POST the picked file to /replace-image against an explicit index. */
+  const uploadReplacementForIndex = async (index, file) => {
+    setReplacingImageIndex(index);
+    setImageReplaceNotice(null);
+    try {
+      const body = new FormData();
+      body.append('image_file', file);
+      body.append('image_index', String(index));
+      body.append('size_mode', 'fit');
+
+      const res = await fetch(`${API_URL}/documents/${doc.id}/replace-image`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body,
+      });
+      if (isAuthExpired(res)) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'The image could not be replaced.');
+      }
+      // Refetch every image: the endpoint is keyed by index, so this is the
+      // only thing that makes the new bytes visible.
+      setImagesVersion((v) => v + 1);
+      setImageReplaceNotice({ tone: 'success', text: data.message || 'Image replaced.' });
+      setAiResult(data.message || 'Image replaced.');
+      refreshFullPreview();
+    } catch (err) {
+      setImageReplaceNotice({ tone: 'error', text: err.message || 'The image could not be replaced.' });
+    } finally {
+      setReplacingImageIndex(null);
+    }
+  };
+
+  const handleImagePick = (e) => {
+    const file = e.target.files?.[0];
+    const index = pendingImageIndexRef.current;
+    // Reset immediately so picking the same file twice still fires onchange.
+    e.target.value = '';
+    if (!file || index === null) return;
+    uploadReplacementForIndex(index, file);
+  };
+
+  /** Prompt-bar attachment: preview it locally, upload only once a target is known. */
+  const handlePromptImagePick = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    if (promptImage?.previewUrl) URL.revokeObjectURL(promptImage.previewUrl);
+    setPromptImage({ file, previewUrl: URL.createObjectURL(file) });
+  };
+
+  const clearPromptImage = () => {
+    if (promptImage?.previewUrl) URL.revokeObjectURL(promptImage.previewUrl);
+    setPromptImage(null);
+  };
+
+  useEffect(() => () => {
+    if (promptImage?.previewUrl) URL.revokeObjectURL(promptImage.previewUrl);
+  }, [promptImage]);
+
+  /**
+   * Upload the attached image against a target the backend has already
+   * validated. A 409 means the phrase was ambiguous, so the server sent
+   * candidates back and the user has to choose - one at a time, never all.
+   */
+  const uploadPromptReplacement = async (index, file, command) => {
+    setReplacingImageIndex(index);
+    setImageReplaceNotice(null);
+    try {
+      const body = new FormData();
+      body.append('image_file', file);
+      body.append('image_index', String(index));
+      if (command) body.append('command', command);
+      body.append('size_mode', 'fit');
+
+      const res = await fetch(`${API_URL}/documents/${doc.id}/replace-image`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body,
+      });
+      if (isAuthExpired(res)) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+      const data = await res.json();
+      if (res.status === 409 && data.candidates?.length) {
+        // The target became ambiguous between resolution and upload. Show the
+        // picker rather than a dead end; the attachment is kept.
+        setAiVariantGroups(data.candidates);
+        setAiInteractiveMode('select_image');
+        setAiResult(data.message || 'Which image should I replace?');
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(data.detail || data.message || 'The image could not be replaced.');
+      }
+      setImagesVersion((v) => v + 1);
+      const text = data.message || 'Image replaced.';
+      setImageReplaceNotice({ tone: 'success', text });
+      setAiResult(text);
+      setAiInteractiveMode('none');
+      clearPromptImage();
+      refreshFullPreview();
+    } catch (err) {
+      setImageReplaceNotice({ tone: 'error', text: err.message || 'The image could not be replaced.' });
+    } finally {
+      setReplacingImageIndex(null);
+    }
+  };
+
   const handleAiSubmit = async (e) => {
     e.preventDefault();
     const prompt = aiPrompt.trim();
-    if (!prompt || aiProcessing) return;
+    const attachedFile = promptImage?.file || null;
+    if ((!prompt && !attachedFile) || aiProcessing) return;
 
     setAiProcessing(true);
     // Clear immediately, before awaiting anything. Leaving the text in the box
@@ -769,7 +1146,10 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           ...getAuthHeaders(),
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ command: prompt }),
+        body: JSON.stringify({
+          command: prompt,
+          has_image_upload: !!attachedFile,
+        }),
         signal: controller.signal
       }).finally(() => clearTimeout(timeoutId));
       if (isAuthExpired(res)) {
@@ -780,7 +1160,25 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         throw new Error(data.detail || 'AI command failed');
       }
 
-      if (data.action === 'replace') {
+      if (data.action === 'replace_image') {
+        // Nothing is written here. The backend resolved which image the phrase
+        // names; if it was unambiguous we go straight to the upload, otherwise
+        // the candidate list becomes a picker.
+        if (data.status === 'resolved' && attachedFile) {
+          await uploadPromptReplacement(data.indexes[0], attachedFile, prompt);
+        } else if (data.status === 'ambiguous' && attachedFile) {
+          setAiVariantGroups(data.candidates || []);
+          setAiInteractiveMode('select_image');
+          setAiResult(data.message || 'Which image should I replace?');
+        } else if (data.status === 'resolved') {
+          setImageReplaceNotice({
+            tone: 'success',
+            text: `Image ${data.indexes[0] + 1} selected. Attach a picture to finish the replacement.`,
+          });
+        } else {
+          setAiResult(data.message || 'Tell me which image to replace.');
+        }
+      } else if (data.action === 'replace') {
         if (data.total_matches === 0) {
           setAiResult(`I searched for "${data.find_text}" but found no matches.`);
         } else {
@@ -815,12 +1213,15 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         setQuizPicks({});
         setQuizMode(false);
         const got = (data.questions || []).length;
+        // Fall back rather than printing "from undefined" if a response ever
+        // arrives without its source label.
+        const from = data.source ? ` from ${data.source}` : '';
         setAiResult(
           got === 0
             ? 'I could not build any questions from this document.'
             : got < (data.requested || got)
-              ? `Generated ${got} of ${data.requested} requested question(s) from ${data.source}.`
-              : `Generated ${got} question(s) from ${data.source}.`
+              ? `Generated ${got} of ${data.requested} requested question(s)${from}.`
+              : `Generated ${got} question(s)${from}.`
         );
       } else {
         setAiResult(data.message || 'I scanned your document. Try e.g. \'Change print to not print\' or \'Change the header to RapidDoc Report\'.');
@@ -1483,20 +1884,20 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
 
                         if (item.kind === 'image') {
                           return (
-                            <div
+                            <EditableImageBlock
                               key={`img-${item.image.image_index}`}
-                              className="my-3 bg-white border border-slate-100 rounded-lg p-2.5"
-                            >
-                              <DocumentImage
-                                docId={doc.id}
-                                index={item.image.image_index}
-                                maxHeight={280}
-                              />
-                              <span className="mt-1.5 inline-block text-[7px] font-bold text-slate-400 uppercase bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">
-                                Image {item.image.image_index + 1}
-                                {item.image.width_px ? ` · ${item.image.width_px}×${item.image.height_px}px` : ''}
-                              </span>
-                            </div>
+                              docId={doc.id}
+                              index={item.image.image_index}
+                              maxHeight={280}
+                              caption={
+                                `Image ${item.image.image_index + 1}` +
+                                (item.image.width_px ? ` · ${item.image.width_px}×${item.image.height_px}px` : '')
+                              }
+                              version={imagesVersion}
+                              replacing={replacingImageIndex === item.image.image_index}
+                              onRequestReplace={requestImageReplace}
+                              onRequestResize={requestImageResize}
+                            />
                           );
                         }
 
@@ -1665,20 +2066,18 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                           interleavePageItems(page).map((item) => {
                             if (item.kind === 'image') {
                               return (
-                                <div
+                                <EditableImageBlock
                                   key={`img-${item.image.image_index}`}
-                                  className="bg-white border border-slate-100 hover:border-amber-200 rounded-xl p-2.5 transition"
-                                >
-                                  <DocumentImage
-                                    docId={doc.id}
-                                    index={item.image.image_index}
-                                    maxHeight={260}
-                                    alt={`Page ${page.page_num + 1} image ${item.image.image_index + 1}`}
-                                  />
-                                  <span className="mt-1.5 inline-block text-[7px] font-bold text-slate-400 uppercase bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">
-                                    Image {item.image.image_index + 1}
-                                  </span>
-                                </div>
+                                  docId={doc.id}
+                                  index={item.image.image_index}
+                                  maxHeight={260}
+                                  alt={`Page ${page.page_num + 1} image ${item.image.image_index + 1}`}
+                                  caption={`Image ${item.image.image_index + 1}`}
+                                  version={imagesVersion}
+                                  replacing={replacingImageIndex === item.image.image_index}
+                                  onRequestReplace={requestImageReplace}
+                                  onRequestResize={requestImageResize}
+                                />
                               );
                             }
                             const block = item.block;
@@ -1863,6 +2262,61 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
             </button>
           </div>
           <div className="flex-grow overflow-y-auto p-3 space-y-2">
+            {/* Rollback timeline: the entries that actually hold the file. */}
+            <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3 space-y-2">
+              <p className="text-[10px] font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1">
+                <History className="w-3 h-3" />
+                Versions
+              </p>
+              {versionError && (
+                <p className="text-[10px] font-semibold text-red-600">{versionError}</p>
+              )}
+              {versions.map((version, idx) => {
+                const target = version.is_original ? 'original' : version.version_id;
+                const busy = restoringVersion === target;
+                return (
+                  <div
+                    key={`${target || 'current'}-${idx}`}
+                    className={`flex items-center justify-between gap-2 bg-white border rounded-lg px-2 py-1.5 ${
+                      version.is_current ? 'border-blue-300' : 'border-blue-100'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold text-slate-700 truncate">
+                        {version.label}
+                        {version.is_current && (
+                          <span className="ml-1 text-[9px] uppercase text-blue-600 bg-blue-50 px-1 py-0.5 rounded">
+                            Live
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-[9px] text-slate-400">
+                        {version.created_at
+                          ? new Date(version.created_at).toLocaleString()
+                          : version.is_current
+                            ? 'Unsaved edits'
+                            : 'Kept automatically'}
+                      </p>
+                    </div>
+                    {version.restorable && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleRestoreVersion(version)}
+                        className="shrink-0 px-2 py-1 rounded-md bg-white border border-blue-200 text-blue-700 text-[9px] font-bold uppercase tracking-wide hover:bg-blue-600 hover:text-white transition disabled:opacity-50 flex items-center gap-1"
+                      >
+                        {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Undo2 className="w-3 h-3" />}
+                        Restore
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              {versions.length === 0 && (
+                <p className="text-[11px] text-slate-400 italic">Loading versions…</p>
+              )}
+            </div>
+
             {aiChanges.length > 0 && (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 space-y-2">
                 <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider flex items-center gap-1">
@@ -1909,6 +2363,45 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                 <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               )}
               <span>{aiResult}</span>
+            </div>
+          )}
+
+          {aiInteractiveMode === 'select_image' && aiVariantGroups.length > 0 && (
+            <div className="mb-2 flex flex-col gap-2 max-h-48 overflow-y-auto rounded-2xl border border-blue-200 bg-blue-50/60 p-3">
+              <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                <ImageIcon className="w-3.5 h-3.5 text-blue-600" />
+                Which image should I replace?
+              </span>
+              {aiVariantGroups.map((candidate) => (
+                <button
+                  key={candidate.index}
+                  type="button"
+                  disabled={replacingImageIndex !== null}
+                  onClick={() => promptImage && uploadPromptReplacement(
+                    candidate.index, promptImage.file, aiFindText
+                  )}
+                  className="flex items-center gap-3 px-3 py-2 bg-white border border-slate-200 hover:border-blue-400 disabled:opacity-50 rounded-lg text-left transition shadow-sm"
+                >
+                  <DocumentImage
+                    docId={doc.id}
+                    index={candidate.index}
+                    maxHeight={48}
+                    version={imagesVersion}
+                    className="shrink-0"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-xs font-bold text-slate-800">
+                      {candidate.label}
+                    </span>
+                    {candidate.occurrences > 1 && (
+                      <span className="block text-[10px] text-amber-600 font-semibold">
+                        Replacing this also changes {candidate.occurrences - 1} other spot
+                        {candidate.occurrences - 1 !== 1 ? 's' : ''}.
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))}
             </div>
           )}
 
@@ -1994,15 +2487,40 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                     ({aiSummary.source}{aiSummary.length ? `, ${aiSummary.length}` : ''})
                   </span>
                 </span>
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard?.writeText(aiSummary.summary || '')}
-                  className="text-[10px] font-bold text-indigo-500 hover:text-indigo-700 flex items-center gap-1 shrink-0"
-                >
-                  <Copy className="w-3 h-3" />
-                  Copy
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard?.writeText(aiSummary.summary || '')}
+                    className="text-[10px] font-bold text-indigo-500 hover:text-indigo-700 flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" />
+                    Copy
+                  </button>
+                  {/* Keep the summary: exporting the text on screen rather than
+                      asking the server to summarise again, because a second pass
+                      would hand back different wording. */}
+                  {SUMMARY_FORMATS.map((fmt) => (
+                    <button
+                      key={fmt.value}
+                      type="button"
+                      disabled={summaryExporting === fmt.value}
+                      onClick={() => handleExportSummary(fmt.value)}
+                      title={`Download as ${fmt.label}`}
+                      className="text-[10px] font-bold text-indigo-500 hover:text-indigo-700 flex items-center gap-1 disabled:opacity-50"
+                    >
+                      {summaryExporting === fmt.value
+                        ? <Loader2 className="w-3 h-3 animate-spin" />
+                        : <Download className="w-3 h-3" />}
+                      {fmt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
+              {summaryExportError && (
+                <p className="mt-1.5 text-[10px] font-semibold text-red-600">
+                  {summaryExportError}
+                </p>
+              )}
               {aiSummary.summary_source === 'conclusion' && (
                 <div className="mt-1.5 mb-2 rounded-xl bg-white/70 border border-indigo-100 px-2.5 py-2">
                   <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-500 mb-1">
@@ -2087,6 +2605,21 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                         Reset
                       </button>
                     )}
+                    {/* Dismiss the generated set without clearing the rest of the
+                        AI panel - there was previously no way to get rid of it. */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAiQuestions(null);
+                        setQuizMode(false);
+                        setQuizPicks({});
+                      }}
+                      title="Dismiss these questions"
+                      aria-label="Dismiss generated questions"
+                      className="rounded-lg border border-slate-300 bg-white p-1 text-slate-500 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-600 transition"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
                   </div>
                 </div>
 
@@ -2181,26 +2714,69 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
             );
           })()}
 
+          {promptImage && (
+            <div className="mb-2 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50/60 px-3 py-2">
+              <img
+                src={promptImage.previewUrl}
+                alt="Replacement to upload"
+                className="h-12 w-auto object-contain rounded-lg bg-white border border-slate-200"
+              />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-bold text-slate-700">
+                  {promptImage.file.name}
+                </span>
+                <span className="block text-[10px] text-slate-500">
+                  Tell RapidDoc which image to swap it for, e.g. &ldquo;the image on page 2&rdquo;
+                  or &ldquo;image 3&rdquo;.
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={clearPromptImage}
+                disabled={aiProcessing || replacingImageIndex !== null}
+                className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition disabled:opacity-40"
+                title="Remove attachment"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <div className="relative rounded-2xl border border-slate-200 bg-slate-50 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition shadow-sm">
             <input
               type="text"
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder='Ask RapidDoc AI... e.g. "Change 24DCS044 to 145", "Change the header to RapidDoc Report", "Summarize this document" or "Generate 5 MCQs"'
+              placeholder='Ask RapidDoc AI... e.g. "Change 24DCS044 to 145", "Replace the image on page 2" (attach a picture), "Summarize this document" or "Generate 5 MCQs"'
               disabled={aiProcessing}
-              className="w-full bg-transparent px-4 py-3 pr-14 outline-none text-sm text-slate-700 disabled:opacity-50 placeholder:text-slate-400"
+              className="w-full bg-transparent py-3 pl-4 pr-24 outline-none text-sm text-slate-700 disabled:opacity-50 placeholder:text-slate-400"
             />
-            <button
-              type="submit"
-              disabled={aiProcessing || !aiPrompt.trim()}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-700 hover:to-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl flex items-center gap-1.5 shadow-md shadow-blue-500/20 transition"
-            >
-              {aiProcessing ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Send className="w-4 h-4" />
-              )}
-            </button>
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => promptImageInputRef.current?.click()}
+                disabled={aiProcessing}
+                title="Attach a picture to replace an image in the document"
+                className={`p-2 rounded-xl transition disabled:opacity-40 ${
+                  promptImage
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'
+                }`}
+              >
+                <Paperclip className="w-4 h-4" />
+              </button>
+              <button
+                type="submit"
+                disabled={aiProcessing || (!aiPrompt.trim() && !promptImage)}
+                className="p-2.5 bg-gradient-to-r from-brand-600 to-indigo-600 hover:from-brand-700 hover:to-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl flex items-center gap-1.5 shadow-md shadow-blue-500/20 transition"
+              >
+                {aiProcessing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -2313,6 +2889,26 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         </div>
       )}
 
+      {/* Image Resize Modal */}
+      {resizeTarget && (
+        <ImageResizeDialog
+          document={doc}
+          image={resizeTarget}
+          version={imagesVersion}
+          onClose={() => setResizeTarget(null)}
+          onResized={(data) => {
+            // The drawn size changed, so both the cached inventory and every
+            // tile thumbnail are now stale.
+            setImageInventory([]);
+            setImagesVersion((v) => v + 1);
+            const text = data.message || 'Image resized.';
+            setImageReplaceNotice({ tone: 'success', text });
+            setAiResult(text);
+            refreshFullPreview();
+          }}
+        />
+      )}
+
       {/* Header & Footer Manager Modal */}
       {hfModalOpen && (
         <HeaderFooterEditor
@@ -2320,10 +2916,56 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           token={token}
           existingHeaders={headerFooter.headers}
           existingFooters={headerFooter.footers}
+          variants={headerFooter}
           initialSection={hfInitialSection}
           onClose={() => setHfModalOpen(false)}
           onSaveSuccess={handleHfSaveSuccess}
         />
+      )}
+
+      {/* Hidden file pickers, triggered programmatically.
+          Double-clicking an image has no <input> to attach to, so the click is
+          forwarded to these instead of asking the user to find an upload button. */}
+      <input
+        ref={imagePickInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/bmp,image/tiff,image/webp"
+        className="hidden"
+        onChange={handleImagePick}
+      />
+      <input
+        ref={promptImageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/bmp,image/tiff,image/webp"
+        className="hidden"
+        onChange={handlePromptImagePick}
+      />
+
+      {/* Result of the last image swap. Kept in the panel rather than an alert()
+          so it sits next to the document it describes. */}
+      {imageReplaceNotice && (
+        <div
+          className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-50 max-w-lg flex items-start gap-2 px-4 py-3 rounded-2xl shadow-2xl border text-xs font-semibold ${
+            imageReplaceNotice.tone === 'error'
+              ? 'bg-red-50 border-red-200 text-red-700'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+          }`}
+        >
+          {imageReplaceNotice.tone === 'error' ? (
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-px" />
+          )}
+          <span className="min-w-0 break-words">{imageReplaceNotice.text}</span>
+          <button
+            type="button"
+            onClick={() => setImageReplaceNotice(null)}
+            className="shrink-0 opacity-60 hover:opacity-100"
+            title="Dismiss"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
       )}
     </div>
   );

@@ -24,6 +24,31 @@ const asText = (v) => {
   return String(v);
 };
 
+// The backend stores the two ends of a header/footer in one string, separated by
+// a tab, and lays them out as real columns on the same line. Editing that as a
+// single textarea made it impossible to see which half was left and which was
+// right, and a literal tab is invisible in a textarea, so the split is surfaced
+// as two fields and rejoined on the way out.
+const splitColumns = (value) => {
+  const [left = '', right = ''] = String(value || '').split('\t');
+  return { left: left.trim(), right: right.trim() };
+};
+
+const joinColumns = (left, right) => {
+  const l = String(left || '').trim();
+  const r = String(right || '').trim();
+  if (l && r) return `${l}\t${r}`;
+  return l || r;
+};
+
+const describeStyle = (style) => {
+  if (!style) return null;
+  const weight = [style.bold && 'bold', style.italic && 'italic'].filter(Boolean).join(' ');
+  return [style.font, weight, style.size ? `${style.size}pt` : null, style.color]
+    .filter(Boolean)
+    .join(' ');
+};
+
 // Preview only: show what a token resolves to on a sample page.
 const previewText = (text, { page = 1, pages = 5 } = {}) =>
   String(text || '')
@@ -94,6 +119,72 @@ function TextField({ id, label, hint, value, onChange, onFocus, placeholder, ali
   );
 }
 
+// Left and right halves of one variant, sharing a single saved string. The right
+// half defaults to right-aligned because that is what a page number, an ID or a
+// date is, and left-aligning it against the left column would needlessly place it
+// mid-line on an A4 page.
+function ColumnFields({ zoneName, field, label, hint, value, onChange, onFocus, placeholderLeft, placeholderRight, fontName }) {
+  const { left, right } = splitColumns(value);
+  const side = (which) => ({ left: 'left', right: 'right' })[which];
+
+  const write = (which, next) => {
+    onChange(joinColumns(which === 'left' ? next : left, which === 'right' ? next : right));
+  };
+
+  return (
+    <div className="space-y-2">
+      <span className="block text-[11px] font-semibold text-slate-500">
+        {label}
+        {hint && <span className="ml-1 font-normal text-slate-400">{hint}</span>}
+      </span>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <TextField
+          id={`${zoneName}-${field}-left`}
+          label="Left"
+          value={left}
+          onFocus={() => onFocus(side('left'))}
+          onChange={(v) => write('left', v)}
+          placeholder={placeholderLeft}
+          align="left"
+          fontName={fontName}
+        />
+        <TextField
+          id={`${zoneName}-${field}-right`}
+          label="Right"
+          value={right}
+          onFocus={() => onFocus(side('right'))}
+          onChange={(v) => write('right', v)}
+          placeholder={placeholderRight}
+          align="right"
+          fontName={fontName}
+        />
+      </div>
+    </div>
+  );
+}
+
+// The PDF lays the two halves out on one line, flush to the edges of the text
+// column. Previewing them stacked, or run together as a single string, hid the
+// very layout being edited, so this mirrors the real arrangement.
+function ColumnPreview({ columns, empty, align, style, className }) {
+  const hasText = Boolean(columns.left || columns.right);
+  return (
+    <div
+      className={`flex items-baseline gap-3 text-[10px] text-slate-600 min-h-[20px] ${alignClass(align)} ${className || ''}`}
+    >
+      <span
+        className={`min-w-0 truncate ${align === 'right' ? 'ml-auto text-right' : ''}`}
+        style={style}
+      >
+        {columns.left || (hasText ? '' : <span className="text-slate-300 italic">{empty}</span>)}
+      </span>
+      <span className="min-w-0 truncate ml-auto text-right" style={style}>
+        {columns.right}
+      </span>
+    </div>
+  );
+}
+
 export const HeaderFooterEditor = ({
   document: doc,
   token,
@@ -124,19 +215,30 @@ export const HeaderFooterEditor = ({
     firstPage: firstSpecific,
   });
 
-  const [fontName, setFontName] = useState('Arial');
-  const [fontSize, setFontSize] = useState(10);
+  // Empty means "keep whatever the document already uses". Defaulting this to a
+  // concrete font and size meant every save overwrote the existing header's
+  // typography: a Times New Roman 12pt header came back as grey Arial 10pt even
+  // when the user changed nothing but the text. The backend now inherits when
+  // these are absent, so the default has to be absent too.
+  const [fontName, setFontName] = useState('');
+  const [fontSize, setFontSize] = useState('');
   const [headerAlign, setHeaderAlign] = useState('center');
   const [footerAlign, setFooterAlign] = useState('center');
 
   // Which textarea the Insert buttons write into, so one button row serves every
-  // variant instead of repeating itself in six places.
-  const [active, setActive] = useState({ zone: 'header', field: 'all' });
+  // variant instead of repeating itself in six places. `side` is which half of
+  // the left/right split is focused.
+  const [active, setActive] = useState({ zone: 'header', field: 'all', side: 'right' });
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
   const fonts = ['Arial', 'Times New Roman', 'Calibri', 'Courier New', 'Helvetica'];
+
+  // What the preview should be drawn in: whatever is actually going to be written.
+  const detectedStyle = variants?.header_style || variants?.footer_style || null;
+  const detectedLabel = describeStyle(detectedStyle);
+  const previewFont = fontName || detectedStyle?.font || undefined;
 
   const setZone = (zone, patch) => {
     const update = zone === 'header' ? setHeader : setFooter;
@@ -147,7 +249,13 @@ export const HeaderFooterEditor = ({
     const macro = MACROS[key];
     if (!macro) return;
     const zone = active.zone === 'header' ? header : footer;
-    setZone(active.zone, { [active.field]: zone[active.field] ? `${zone[active.field]} ${macro}` : macro });
+    const columns = splitColumns(zone[active.field]);
+    // A macro goes into whichever half was last focused, so the button does the
+    // obvious thing without the user having to say "right column" out loud.
+    const next = active.side === 'right'
+      ? joinColumns(columns.left, columns.right ? `${columns.right} ${macro}` : macro)
+      : joinColumns(columns.left ? `${columns.left} ${macro}` : macro, columns.right);
+    setZone(active.zone, { [active.field]: next });
   };
 
   const visibleFields = (zone) => {
@@ -185,8 +293,9 @@ export const HeaderFooterEditor = ({
       const payload = {
         ...zonePayload(header, 'header'),
         ...zonePayload(footer, 'footer'),
-        font_name: fontName,
-        font_size: fontSize,
+        // Empty means "inherit what is already there". See the state comment.
+        font_name: fontName || null,
+        font_size: fontSize === '' ? null : Number(fontSize),
         alignment: 'center',
         header_alignment: headerAlign,
         footer_alignment: footerAlign,
@@ -282,56 +391,60 @@ export const HeaderFooterEditor = ({
           </label>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="space-y-3">
           {zone.firstPage && (
-            <TextField
-              id={`${zoneName}-first`}
+            <ColumnFields
+              zoneName={zoneName}
+              field="first"
               label="First page"
               hint="(page 1)"
               value={zone.first}
-              onFocus={() => setActive({ zone: zoneName, field: 'first' })}
+              onFocus={(side) => setActive({ zone: zoneName, field: 'first', side })}
               onChange={(v) => setZone(zoneName, { first: v })}
-              placeholder={`Leave blank to keep the ${isHeader ? 'header' : 'footer'} off page 1`}
-              align={align}
-              fontName={fontName}
+              placeholderLeft={`Leave blank to keep the ${isHeader ? 'header' : 'footer'} off page 1`}
+              placeholderRight="e.g. {PAGE}"
+              fontName={previewFont}
             />
           )}
 
           {zone.sides ? (
             <>
-              <TextField
-                id={`${zoneName}-odd`}
+              <ColumnFields
+                zoneName={zoneName}
+                field="odd"
                 label="Right pages"
                 hint="(odd: 1, 3, 5…)"
                 value={zone.odd}
-                onFocus={() => setActive({ zone: zoneName, field: 'odd' })}
+                onFocus={(side) => setActive({ zone: zoneName, field: 'odd', side })}
                 onChange={(v) => setZone(zoneName, { odd: v })}
-                placeholder={`Text shown on ${isHeader ? 'headers' : 'footers'} of right-hand pages`}
-                align={align}
-                fontName={fontName}
+                placeholderLeft={`Text on ${isHeader ? 'headers' : 'footers'} of right-hand pages`}
+                placeholderRight="e.g. {PAGE}"
+                fontName={previewFont}
               />
-              <TextField
-                id={`${zoneName}-even`}
+              <ColumnFields
+                zoneName={zoneName}
+                field="even"
                 label="Left pages"
                 hint="(even: 2, 4, 6…)"
                 value={zone.even}
-                onFocus={() => setActive({ zone: zoneName, field: 'even' })}
+                onFocus={(side) => setActive({ zone: zoneName, field: 'even', side })}
                 onChange={(v) => setZone(zoneName, { even: v })}
-                placeholder={`Text shown on ${isHeader ? 'headers' : 'footers'} of left-hand pages`}
-                align={align}
-                fontName={fontName}
+                placeholderLeft={`Text on ${isHeader ? 'headers' : 'footers'} of left-hand pages`}
+                placeholderRight="e.g. {PAGE}"
+                fontName={previewFont}
               />
             </>
           ) : (
-            <TextField
-              id={`${zoneName}-all`}
+            <ColumnFields
+              zoneName={zoneName}
+              field="all"
               label={`${isHeader ? 'Header' : 'Footer'} text`}
               value={zone.all}
-              onFocus={() => setActive({ zone: zoneName, field: 'all' })}
+              onFocus={(side) => setActive({ zone: zoneName, field: 'all', side })}
               onChange={(v) => setZone(zoneName, { all: v })}
-              placeholder={verb}
-              align={align}
-              fontName={fontName}
+              placeholderLeft={verb}
+              placeholderRight="Right-hand side of the same line"
+              fontName={previewFont}
             />
           )}
         </div>
@@ -390,12 +503,16 @@ export const HeaderFooterEditor = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-500 mb-1">Font Family</label>
+                <label htmlFor="hf-font-family" className="block text-[11px] font-semibold text-slate-500 mb-1">
+                  Font Family
+                </label>
                 <select
+                  id="hf-font-family"
                   value={fontName}
                   onChange={(e) => setFontName(e.target.value)}
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:outline-none focus:border-blue-500"
                 >
+                  <option value="">Match document{detectedLabel ? ` (${detectedLabel})` : ''}</option>
                   {fonts.map((f) => (
                     <option key={f} value={f}>{f}</option>
                   ))}
@@ -403,24 +520,35 @@ export const HeaderFooterEditor = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-500 mb-1">Font Size (pt)</label>
+                <label htmlFor="hf-font-size" className="block text-[11px] font-semibold text-slate-500 mb-1">
+                  Font Size (pt)
+                </label>
                 <input
+                  id="hf-font-size"
                   type="number"
                   min="6"
                   max="24"
                   value={fontSize}
-                  onChange={(e) => setFontSize(parseFloat(e.target.value) || 10)}
+                  placeholder={detectedStyle?.size ? String(detectedStyle.size) : 'Match document'}
+                  onChange={(e) => setFontSize(e.target.value === '' ? '' : parseFloat(e.target.value))}
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-700 focus:outline-none focus:border-blue-500"
                 />
               </div>
             </div>
+
+            {!fontName && !fontSize && detectedLabel && (
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                Leaving these empty keeps the header and footer exactly as they are styled now,
+                so editing the text cannot change the look of the document.
+              </p>
+            )}
           </div>
 
           {/* Insert row: writes into whichever field was last focused. */}
           <div className="p-4 bg-white border border-slate-200/80 rounded-2xl space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                Insert into {active.zone} — {activeLabel}
+                Insert into {active.zone} — {activeLabel} ({active.side})
               </span>
               <span className="text-[10px] text-slate-400">
                 Focus a field above to choose where these go
@@ -505,27 +633,41 @@ export const HeaderFooterEditor = ({
                     footerText !== null
                       ? footerText
                       : previewText(footer.sides ? (page % 2 ? footer.odd : footer.even) : footer.all, { page });
+                  const headerColumns = splitColumns(shownHeader);
+                  const footerColumns = splitColumns(shownFooter);
+                  // Only claim a font in the preview when one is actually going to
+                  // be written; otherwise mirror what was detected so the preview
+                  // matches the saved result.
+                  const columnStyle = {
+                    fontFamily: previewFont,
+                    fontSize: fontSize ? `${fontSize}pt` : detectedStyle?.size ? `${detectedStyle.size}pt` : undefined,
+                    fontWeight: fontName ? undefined : detectedStyle?.bold ? 'bold' : undefined,
+                    fontStyle: fontName ? undefined : detectedStyle?.italic ? 'italic' : undefined,
+                    color: fontName ? undefined : detectedStyle?.color || undefined,
+                  };
 
                   return (
                     <div key={key} className="bg-white rounded-lg border border-slate-300/70 p-3 shadow-sm min-h-[130px] flex flex-col justify-between">
                       <div className="text-[9px] text-slate-400 mb-1 text-center font-semibold uppercase tracking-wider">
                         {label}
                       </div>
-                      <div
-                        className={`text-[10px] text-slate-600 pb-2 border-b border-dashed border-slate-200 min-h-[20px] ${alignClass(headerAlign)}`}
-                        style={{ fontFamily: fontName }}
-                      >
-                        {shownHeader || <span className="text-slate-300 italic">[No Header]</span>}
-                      </div>
+                      <ColumnPreview
+                        columns={headerColumns}
+                        empty="[No Header]"
+                        align={headerAlign}
+                        style={columnStyle}
+                        className="pb-2 border-b border-dashed border-slate-200"
+                      />
                       <div className="py-2 text-[9px] text-slate-300 text-center italic">
                         — Body Content —
                       </div>
-                      <div
-                        className={`text-[10px] text-slate-600 pt-2 border-t border-dashed border-slate-200 min-h-[20px] ${alignClass(footerAlign)}`}
-                        style={{ fontFamily: fontName }}
-                      >
-                        {shownFooter || <span className="text-slate-300 italic">[No Footer]</span>}
-                      </div>
+                      <ColumnPreview
+                        columns={footerColumns}
+                        empty="[No Footer]"
+                        align={footerAlign}
+                        style={columnStyle}
+                        className="pt-2 border-t border-dashed border-slate-200"
+                      />
                     </div>
                   );
                 })}

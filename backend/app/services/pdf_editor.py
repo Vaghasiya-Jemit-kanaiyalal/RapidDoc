@@ -240,18 +240,13 @@ def apply_pdf_styling(
             _apply_pdf_image_replacements(doc, image_replacements)
 
         # 2. Add Header & Footer overlays
-        # Map frontend font choices to TextWriter base-14 PDF font codes
-        pdf_font = "helv"  # Default Helvetica
-        if font_name:
-            fn_lower = font_name.lower()
-            if "times" in fn_lower:
-                pdf_font = "tiro"
-            elif "courier" in fn_lower:
-                pdf_font = "cour"
-            elif "helvetica" in fn_lower or "arial" in fn_lower or "calibri" in fn_lower:
-                pdf_font = "helv"
-
-        f_size = font_size if font_size else 10.0
+        # A font the caller did not choose stays None so the writer inherits the
+        # page's existing furniture, rather than imposing Helvetica 10pt grey on
+        # a header that was Times New Roman 12pt bold. base14_font keeps the
+        # weight: the old family-only mapping turned "TimesNewRomanPS-BoldMT"
+        # into regular Times.
+        pdf_font = hf.base14_font(font_name) if font_name else None
+        f_size = float(font_size) if font_size else None
 
         header_spec = hf.spec_from_legacy(
             header_text=header_text,
@@ -301,9 +296,9 @@ def _restrict_spec(spec, target_text, which, doc):
         return spec
 
     wanted_pages = set()
+    page_count = doc.page_count
     for index, page in enumerate(doc):
-        band = hf.band_rect(page, which)
-        if page.get_text("text", clip=band).strip() == target_text.strip():
+        if hf.band_text(page, which, index + 1, page_count) == target_text:
             wanted_pages.add(index + 1)
 
     if not wanted_pages:

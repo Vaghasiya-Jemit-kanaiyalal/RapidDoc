@@ -633,58 +633,39 @@ const LandingPage = ({ onNavigate }) => {
       {/* ═══════════════════════════════════════════════════ */}
       {/* SECTION 7: CTA BANNER                              */}
       {/* ═══════════════════════════════════════════════════ */}
-      <section className="relative z-10 py-24">
+      <section className="relative z-10 py-20">
         <div className="max-w-5xl mx-auto px-6 lg:px-8">
           <ScrollReveal direction="scale">
-            <div className="relative overflow-hidden rounded-[32px] bg-gradient-to-br from-brand-600 via-indigo-600 to-purple-700 p-12 lg:p-16 text-center shadow-[0_30px_80px_-20px_rgba(54,92,255,0.4)]">
-              {/* Background decorations */}
-              <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
-                <motion.div
-                  animate={{ scale: [1, 1.3, 1], opacity: [0.15, 0.3, 0.15] }}
-                  transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut' }}
-                  className="absolute -top-20 -right-20 w-[400px] h-[400px] bg-white/10 rounded-full blur-[80px]"
-                />
-                <motion.div
-                  animate={{ scale: [1, 1.2, 1], opacity: [0.1, 0.25, 0.1] }}
-                  transition={{ duration: 10, repeat: Infinity, ease: 'easeInOut', delay: 2 }}
-                  className="absolute -bottom-20 -left-20 w-[350px] h-[350px] bg-white/10 rounded-full blur-[80px]"
-                />
-                {/* Floating dots */}
-                <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(white 1px, transparent 1px)', backgroundSize: '24px 24px' }} />
-              </div>
+            <div className="relative overflow-hidden rounded-[32px] bg-gradient-to-b from-[#F2F6FF] to-[#EBF2FF] border border-[#D5E3FC] p-12 sm:p-14 lg:p-16 text-center shadow-[0_20px_60px_-15px_rgba(54,92,255,0.07)]">
+              {/* Subtle ambient light accents */}
+              <div className="absolute top-0 right-0 w-80 h-80 bg-blue-400/10 rounded-full blur-3xl pointer-events-none -translate-y-1/2 translate-x-1/2" />
+              <div className="absolute bottom-0 left-0 w-80 h-80 bg-indigo-400/10 rounded-full blur-3xl pointer-events-none translate-y-1/2 -translate-x-1/2" />
 
               <div className="relative z-10">
-                <motion.div
-                  animate={{ y: [-4, 4, -4] }}
-                  transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-                  className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-white/15 backdrop-blur-md border border-white/20 mb-6"
-                >
-                  <Sparkles className="w-8 h-8 text-white" />
-                </motion.div>
-                <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-white mb-4 tracking-tight">
-                  Ready to Transform Your Documents?
+                <h2 className="text-4xl sm:text-5xl lg:text-[56px] font-black text-slate-900 mb-4 tracking-tight leading-[1.12]">
+                  Ready to Transform<br className="hidden sm:inline" /> Your <span className="text-[#1D61FF]">Documents?</span>
                 </h2>
-                <p className="text-lg text-white/80 max-w-xl mx-auto mb-8 leading-relaxed">
+                <p className="text-base sm:text-lg text-slate-600 max-w-xl mx-auto mb-8 leading-relaxed">
                   Join thousands of users who are already working smarter with RapidDoc's AI-powered document intelligence.
                 </p>
-                <div className="flex flex-wrap justify-center gap-4">
+                <div className="flex flex-wrap items-center justify-center gap-4">
                   <motion.button
-                    whileHover={{ scale: 1.04 }}
+                    whileHover={{ scale: 1.03 }}
                     whileTap={{ scale: 0.97 }}
                     onClick={() => onNavigate(user ? 'dashboard' : 'register')}
-                    className="h-[54px] px-8 rounded-2xl bg-white text-brand-700 hover:text-brand-800 font-extrabold text-sm sm:text-base shadow-[0_10px_25px_rgba(0,0,0,0.18)] hover:shadow-[0_15px_30px_rgba(0,0,0,0.24)] flex items-center gap-2.5 hover:bg-white/95 transition duration-200 cursor-pointer"
+                    className="h-[50px] sm:h-[52px] px-8 rounded-2xl bg-[#1D61FF] hover:bg-[#1554E6] text-white font-extrabold text-sm sm:text-base shadow-[0_4px_16px_rgba(29,97,255,0.25)] hover:shadow-[0_6px_22px_rgba(29,97,255,0.38)] flex items-center gap-2.5 transition-all duration-200 cursor-pointer"
                   >
-                    <span>{user ? 'Go to Dashboard' : 'Get Started for Free'}</span>
-                    <ArrowRight className="w-4 h-4" />
+                    <span>{user ? 'Go to Dashboard' : 'Get Started'}</span>
+                    <ArrowRight className="w-4 h-4 text-white" />
                   </motion.button>
                   <motion.button
-                    whileHover={{ scale: 1.04 }}
+                    whileHover={{ scale: 1.03 }}
                     whileTap={{ scale: 0.97 }}
                     onClick={() => { const el = document.getElementById('features'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }}
-                    className="h-[54px] px-8 rounded-2xl bg-white/15 backdrop-blur-md border border-white/40 text-white hover:bg-white/25 font-extrabold text-sm sm:text-base flex items-center gap-2.5 transition duration-200 cursor-pointer"
+                    className="h-[50px] sm:h-[52px] px-8 rounded-2xl bg-white/60 hover:bg-white border border-[#1D61FF] text-[#1D61FF] hover:text-[#1554E6] font-extrabold text-sm sm:text-base flex items-center gap-2.5 shadow-2xs hover:shadow-xs transition-all duration-200 cursor-pointer"
                   >
                     <span>Explore Features</span>
-                    <ChevronRight className="w-4 h-4" />
+                    <ArrowRight className="w-4 h-4 text-[#1D61FF]" />
                   </motion.button>
                 </div>
               </div>
@@ -1010,16 +991,13 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
               whileHover={{ y: -4, scale: 1.02 }}
               className={`relative overflow-hidden rounded-2xl bg-white/90 backdrop-blur-md border ${card.lightBorder} shadow-card hover:shadow-card-hover transition-all duration-300 p-5`}
             >
-              {/* Top gradient accent bar */}
-              <div className={`absolute top-0 left-0 right-0 h-1 ${card.accentBar} rounded-t-2xl`} />
-              
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-[11px] uppercase font-bold text-secondary tracking-wider mb-1">{card.label}</p>
+              <div className="flex flex-col">
+                <p className="text-[11px] uppercase font-bold text-secondary tracking-wider mb-3.5 text-left">{card.label}</p>
+                <div className="flex items-center justify-between">
+                  <div className={`w-12 h-12 rounded-2xl ${card.lightBg} border ${card.lightBorder} flex items-center justify-center shrink-0`}>
+                    <card.icon className={`w-6 h-6 ${card.textColor}`} />
+                  </div>
                   <p className={`text-3xl font-extrabold ${card.textColor} tabular-nums tracking-tight`}>{card.value}</p>
-                </div>
-                <div className={`w-12 h-12 rounded-2xl ${card.lightBg} border ${card.lightBorder} flex items-center justify-center`}>
-                  <card.icon className={`w-6 h-6 ${card.textColor}`} />
                 </div>
               </div>
             </motion.div>

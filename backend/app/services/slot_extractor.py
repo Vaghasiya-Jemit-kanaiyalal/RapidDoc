@@ -50,12 +50,26 @@ FOOTER_NEW_TEXT_RES = [
 
 # --- "replace X with Y" patterns --------------------------------------------
 REPLACE_WITH_RES = [
+    # 1. "find X and replace with Y" / "search for X and replace with Y" / "find X replace with Y"
     re.compile(
-        r"^\s*(?:please\s+|kindly\s+)?(?:change|replace|edit|swap)\s+(?:out\s+)?(?:the\s+)?[\"'“”]?([^'\"“”]+?)['\"“”]?\s+(?:to|with|into|by|for)\s+[\"'“”]?([^'\"“”]+?)['\"“”]?\.?\s*$",
-        re.IGNORECASE),
+        r'''^\s*(?:please\s+|kindly\s+)?(?:find|search(?:\s+for)?)\s+[\"'“”`]?(.+?)[\"'“”`]?\s+(?:and\s+)?(?:replace|repalce|relpace|change|c?hange|chnage|cahnge|swap|substitute)(?:\s+it)?\s+(?:with|to|by|for|into|as)\s+[\"'“”`]?(.+?)[\"'“”`]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
+    # 2. "swap X for Y" / "swap X with Y" / "substitute X for/with Y"
     re.compile(
-        r"[\"'“”]([^'\"“”]+?)['\"“”]\s*(?:with|->|=>)\s*[\"'“”]([^'\"“”]+?)['\"“”]",
-        re.IGNORECASE),
+        r'''^\s*(?:please\s+|kindly\s+)?(?:swap|substitute)\s+(?:the\s+)?[\"'“”`]?(.+?)[\"'“”`]?\s+(?:with|for|to|by|into|as)\s+[\"'“”`]?(.+?)[\"'“”`]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
+    # 3. Arrow replacement: "replace X -> Y" / "change X -> Y" / "X -> Y"
+    re.compile(
+        r'''^\s*(?:(?:change|c?hange|chnage|cahnge|replace|repalce|relpace|edit|update|swap)\s+)?[\"'“”`]?([^'\"“”`\n\r\->]+?)[\"'“”`]?\s*(?:->|=>)\s*[\"'“”`]?([^'\"“”`\n\r]+?)[\"'“”`]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
+    # 4. Standard "change/replace/edit X to/with/by/into/for Y" (handles typos like 'hange', colons, 'from X to Y')
+    re.compile(
+        r'''^\s*(?:please\s+|kindly\s+)?(?:change|c?hange|chnage|cahnge|replace|repalce|relpace|edit|update|switch|turn|modify|convert)(?:\s*:|\s+from)?\s+(?:the\s+)?(?:word|phrase|text|number|value)?\s*[\"'“”`]?(.+?)[\"'“”`]?\s+(?:to|with|by|into|for|as)\s+[\"'“”`]?(.+?)[\"'“”`]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
 ]
 
 
@@ -67,32 +81,47 @@ def _match_first(patterns, text):
     return None
 
 
+_STRIP_CHARS = " \t\r\n'\"“”`"
 _NEW_TEXT_FILLER = re.compile(r"^\s*(?:say|read|be|to|is|as|should|please|kindly)\s+", re.IGNORECASE)
 
 
 def _clean_new_text(value):
     if not value:
         return value
-    v = value.strip().strip("'\"“”")
+    v = value.strip(_STRIP_CHARS)
     v = _NEW_TEXT_FILLER.sub("", v)
+    v = re.sub(
+        r"\s+(?:in\s+(?:the\s+|all\s+|this\s+)?(?:document|doc|file|text|page)|everywhere|across\s+(?:the\s+)?(?:document|doc|file|whole\s+document)|throughout\s+(?:the\s+)?(?:document|doc|file))\s*$",
+        "",
+        v,
+        flags=re.I,
+    )
+    v = re.sub(
+        r"^(?:(?:to|with|into|by|as|for)\s+)?(?:the\s+)?(?:word|words|phrase|phrases|text|string|term|terms|value|values|number|numbers)\s+(?:of\s+)?",
+        "",
+        v,
+        flags=re.I,
+    )
+    v = v.strip(_STRIP_CHARS)
     return v.rstrip(" ,;:.").strip()
-
-
-# Filler words that can precede the actual old text in unquoted phrases,
-# e.g. "Replace the text Draft with Final" -> old_text is "Draft", not
-# "text Draft".
-_OLD_TEXT_FILLER = re.compile(
-    r"^\s*(?:the\s+)?(?:text|word|phrase|sentence|line)\s+(?=\S)",
-    re.IGNORECASE,
-)
 
 
 def _clean_old_text(value):
     if not value:
         return value
-    v = value.strip()
-    v = _OLD_TEXT_FILLER.sub("", v)
-    return v or value.strip()
+    v = value.strip(_STRIP_CHARS)
+    v = re.sub(
+        r"^(?:(?:all|every|any)\s+(?:instances?|occurrences?)\s+of\s+|"
+        r"(?:all|every|any)\s+(?:the\s+)?(?:word|words|phrase|phrases|text|string|terms?|value|values|number|numbers)?\s*|"
+        r"from\s+|"
+        r"(?:the\s+)?(?:word|words|phrase|phrases|text|string|term|terms|value|values|number|numbers)\s+(?:of\s+)?|"
+        r"the\s+)",
+        "",
+        v,
+        flags=re.I,
+    )
+    v = v.strip(_STRIP_CHARS)
+    return v.rstrip(" ,;:.").strip() or value.strip()
 
 
 def extract_slots(prompt: str, intent: str) -> dict:
@@ -101,11 +130,11 @@ def extract_slots(prompt: str, intent: str) -> dict:
     text_lower = text.lower()
 
     # --- quoted phrases: old/new for replace, else target text ---------------
-    quotes = re.findall(r"['\"“”]([^'\"“”]+)['\"“”]", text)
+    quotes = re.findall(r"['\"“”`]([^'\"“”`]+)['\"“”`]", text)
     if quotes:
         if intent == "replace_text" and len(quotes) >= 2:
-            slots["old_text"] = quotes[0].strip()
-            slots["new_text"] = quotes[1].strip()
+            slots["old_text"] = _clean_old_text(quotes[0].strip())
+            slots["new_text"] = _clean_new_text(quotes[1].strip())
         else:
             slots["target_text"] = quotes[0].strip()
 
@@ -115,7 +144,7 @@ def extract_slots(prompt: str, intent: str) -> dict:
             for pat in REPLACE_WITH_RES:
                 m = pat.search(text)
                 if m and m.group(1).strip() and m.group(2).strip():
-                    slots["old_text"] = _clean_old_text(_clean_new_text(m.group(1)))
+                    slots["old_text"] = _clean_old_text(m.group(1))
                     slots["new_text"] = _clean_new_text(m.group(2))
                     break
 

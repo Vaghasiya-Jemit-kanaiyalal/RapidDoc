@@ -63,23 +63,28 @@ FALLBACK_FOOTER_RE = re.compile(
     re.IGNORECASE,
 )
 FALLBACK_REPLACE_PATTERNS = [
-    # 1. "find X and replace with Y" / "search for X and replace with Y"
+    # 1. "find X and replace with Y" / "search for X and replace with Y" / "find X replace with Y"
     re.compile(
-        r'''^(?:find|search(?:\s+for)?)\s+["'“”]?([^'"“”]+?)['"“”]?\s+(?:and\s+)?(?:replace|change|swap|substitute)(?:\s+it)?\s+(?:with|to|by|for|into)\s+["'“”]?([^'"“”]+?)['"“”]?\.?\s*$''',
+        r'''^\s*(?:please\s+|kindly\s+)?(?:find|search(?:\s+for)?)\s+[\"'“”`]?(.+?)[\"'“”`]?\s+(?:and\s+)?(?:replace|repalce|relpace|change|c?hange|chnage|cahnge|swap|substitute)(?:\s+it)?\s+(?:with|to|by|for|into|as)\s+[\"'“”`]?(.+?)[\"'“”`]?\.?\s*$''',
         re.IGNORECASE,
     ),
     # 2. "swap X for Y" / "swap X with Y" / "substitute X for/with Y"
     re.compile(
-        r'''^(?:swap|substitute)\s+(?:the\s+)?["'“”]?([^'"“”]+?)['"“”]?\s+(?:with|for|to|by)\s+["'“”]?([^'"“”]+?)['"“”]?\.?\s*$''',
+        r'''^\s*(?:please\s+|kindly\s+)?(?:swap|substitute)\s+(?:the\s+)?[\"'“”`]?(.+?)[\"'“”`]?\s+(?:with|for|to|by|into|as)\s+[\"'“”`]?(.+?)[\"'“”`]?\.?\s*$''',
         re.IGNORECASE,
     ),
-    # 3. Standard "change/replace/edit X to/with/by/into/for Y"
+    # 3. Arrow replacement: "replace X -> Y" / "change X -> Y" / "X -> Y"
     re.compile(
-        r'''^(?:change|replace|edit|update)\s+(?:the\s+)?(?:word|phrase|text)?\s*["'“”]?([^'"“”]+?)['"“”]?\s+(?:to|with|by|into|for)\s+["'“”]?([^'"“”]+?)['"“”]?\.?\s*$''',
+        r'''^\s*(?:(?:change|c?hange|chnage|cahnge|replace|repalce|relpace|edit|update|swap)\s+)?[\"'“”`]?([^'\"“”`\n\r\->]+?)[\"'“”`]?\s*(?:->|=>)\s*[\"'“”`]?([^'\"“”`\n\r]+?)[\"'“”`]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
+    # 4. Standard "change/replace/edit X to/with/by/into/for Y" (handles typos like 'hange', colons, 'from X to Y')
+    re.compile(
+        r'''^\s*(?:please\s+|kindly\s+)?(?:change|c?hange|chnage|cahnge|replace|repalce|relpace|edit|update|switch|turn|modify|convert)(?:\s*:|\s+from)?\s+(?:the\s+)?(?:word|phrase|text|number|value)?\s*[\"'“”`]?(.+?)[\"'“”`]?\s+(?:to|with|by|into|for|as)\s+[\"'“”`]?(.+?)[\"'“”`]?\.?\s*$''',
         re.IGNORECASE,
     ),
 ]
-FALLBACK_REPLACE_RE = FALLBACK_REPLACE_PATTERNS[2]
+FALLBACK_REPLACE_RE = FALLBACK_REPLACE_PATTERNS[3]
 
 # Robust tier-3 patterns for generative intents: summarize, quiz, rewrite
 FALLBACK_SUMMARIZE_RE = re.compile(
@@ -106,21 +111,55 @@ FALLBACK_REPLACE_IMAGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+_STRIP_CHARS = " \t\r\n'\"“”`"
 
-def _clean_find_text(value):
-    """Drop filler words that accidentally get captured as the find text.
 
-    e.g. "Replace the word Program with Project" -> find_text is "Program",
-    not "word Program". Only strips when a real token remains.
+def _clean_find_text(value: str) -> str:
+    """Drop filler words and syntax markers that accidentally get captured as the find text.
+
+    e.g. "Replace the word Program with Project" -> find_text is "Program".
+    "replace all apple with orange" -> find_text is "apple".
+    "change from apple to orange" -> find_text is "apple".
     """
     if not value:
-        return value
-    v = value.strip().strip("'\"“”")
-    m = re.match(r"^\s*(?:the\s+)?(?:word|text|phrase|sentence|line)\s+(?=\S)", v, re.I)
-    if m:
-        stripped = v[m.end():].strip()
-        if stripped:
-            return stripped
+        return ""
+    v = value.strip(_STRIP_CHARS)
+    v = re.sub(
+        r"^(?:(?:all|every|any)\s+(?:instances?|occurrences?)\s+of\s+|"
+        r"(?:all|every|any)\s+(?:the\s+)?(?:word|words|phrase|phrases|text|string|terms?|value|values|number|numbers)?\s*|"
+        r"from\s+|"
+        r"(?:the\s+)?(?:word|words|phrase|phrases|text|string|term|terms|value|values|number|numbers)\s+(?:of\s+)?|"
+        r"the\s+)",
+        "",
+        v,
+        flags=re.I,
+    )
+    v = v.strip(_STRIP_CHARS)
+    return v.rstrip(" ,;:.").strip()
+
+
+def _clean_replace_text(value: str) -> str:
+    """Drop filler words and trailing document scopes that get captured as replace text.
+
+    e.g. "replace cat with dog in document" -> replace_text is "dog".
+    "replace cat with dog across the document" -> replace_text is "dog".
+    """
+    if not value:
+        return ""
+    v = value.strip(_STRIP_CHARS)
+    v = re.sub(
+        r"\s+(?:in\s+(?:the\s+|all\s+|this\s+)?(?:document|doc|file|text|page)|everywhere|across\s+(?:the\s+)?(?:document|doc|file|whole\s+document)|throughout\s+(?:the\s+)?(?:document|doc|file))\s*$",
+        "",
+        v,
+        flags=re.I,
+    )
+    v = re.sub(
+        r"^(?:(?:to|with|into|by|as|for)\s+)?(?:the\s+)?(?:word|words|phrase|phrases|text|string|term|terms|value|values|number|numbers)\s+(?:of\s+)?",
+        "",
+        v,
+        flags=re.I,
+    )
+    v = v.strip(_STRIP_CHARS)
     return v.rstrip(" ,;:.").strip()
 
 
@@ -140,13 +179,16 @@ def _fallback_intent(prompt: str, has_image_upload: bool = False) -> dict:
         return {"action": "replace_image"}
 
     for r in FALLBACK_REPLACE_PATTERNS:
-        m = r.match(prompt)
+        m = r.match(prompt.strip())
         if m:
-            return {
-                "action": "replace",
-                "find_text": _clean_find_text(m.group(1)),
-                "replace_text": _clean_find_text(m.group(2)),
-            }
+            find_txt = _clean_find_text(m.group(1))
+            repl_txt = _clean_replace_text(m.group(2))
+            if find_txt and repl_txt:
+                return {
+                    "action": "replace",
+                    "find_text": find_txt,
+                    "replace_text": repl_txt,
+                }
 
     if FALLBACK_MCQ_RE.search(prompt):
         count = 5
@@ -361,8 +403,8 @@ def _local_intent_to_response(prompt: str, intent: str) -> dict:
         return None
     slots = extract_slots(prompt, intent)
     if action == "replace":
-        find_text = (slots.get("old_text") or slots.get("target_text") or "").strip()
-        replace_text = (slots.get("new_text") or "").strip()
+        find_text = _clean_find_text(slots.get("old_text") or slots.get("target_text") or "")
+        replace_text = _clean_replace_text(slots.get("new_text") or "")
         if not find_text or not replace_text:
             return None
         return {

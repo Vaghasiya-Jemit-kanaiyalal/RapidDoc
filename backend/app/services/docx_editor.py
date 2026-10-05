@@ -1319,7 +1319,11 @@ def find_text_variants(doc_path: str, find_text: str, case_sensitive: bool = Tru
     try:
         doc = docx.Document(doc_path)
         flags = 0 if case_sensitive else re.IGNORECASE
-        prefix_pattern = re.compile(r"\b" + re.escape(find_text) + r"\w*", flags)
+        escaped_tokens = [re.escape(tok) for tok in re.split(r"\s+", find_text.strip()) if tok]
+        escaped_pattern = r"\s+".join(escaped_tokens) if escaped_tokens else re.escape(find_text)
+        start_b = r"\b" if (find_text and (find_text[0].isalnum() or find_text[0] == "_")) else r"(?<!\w)"
+        end_b = r"\w*" if (find_text and (find_text[-1].isalnum() or find_text[-1] == "_")) else r"(?!\w)"
+        prefix_pattern = re.compile(start_b + escaped_pattern + end_b, flags)
 
         groups = {}
         for loc, p in _collect_docx_paragraphs(doc):
@@ -1364,7 +1368,11 @@ def selective_replace_docx(
             original = p.text or ""
             paragraph_count = 0
             for variant in variants:
-                pattern = re.compile(r"\b" + re.escape(variant) + r"\b", flags)
+                escaped_tokens = [re.escape(tok) for tok in re.split(r"\s+", variant.strip()) if tok]
+                escaped_variant = r"\s+".join(escaped_tokens) if escaped_tokens else re.escape(variant)
+                start_b = r"\b" if (variant and (variant[0].isalnum() or variant[0] == "_")) else r"(?<!\w)"
+                end_b = r"\b" if (variant and (variant[-1].isalnum() or variant[-1] == "_")) else r"(?!\w)"
+                pattern = re.compile(start_b + escaped_variant + end_b, flags)
                 matches = list(pattern.finditer(p.text or ""))
                 for m in reversed(matches):
                     _replace_span(p, m.start(), m.end(), replace_text)

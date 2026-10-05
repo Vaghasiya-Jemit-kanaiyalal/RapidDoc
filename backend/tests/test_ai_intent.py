@@ -150,3 +150,47 @@ def test_unknown_result_is_json_safe():
     assert all(
         isinstance(v, (str, int, float, bool, type(None))) for v in result.values()
     ), result
+
+
+# ---------------------------------------------------------------------------
+# Robust search and replace phrasing & typo variations
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_find", "expected_replace"),
+    [
+        ("change this to this", "this", "this"),
+        ("hange this to this", "this", "this"),
+        ("hange this to that", "this", "that"),
+        ("cahnge this to that", "this", "that"),
+        ("chnage this to that", "this", "that"),
+        ("repalce this with that", "this", "that"),
+        ("relpace this with that", "this", "that"),
+        ("change apple to orange", "apple", "orange"),
+        ("replace all apple with orange", "apple", "orange"),
+        ("change all apple to orange", "apple", "orange"),
+        ("replace every cat with dog", "cat", "dog"),
+        ("change from apple to orange", "apple", "orange"),
+        ("replace apple with orange in document", "apple", "orange"),
+        ("replace apple with orange in the document", "apple", "orange"),
+        ("replace apple with orange everywhere", "apple", "orange"),
+        ("replace apple with orange across the document", "apple", "orange"),
+        ("find cat and replace with dog", "cat", "dog"),
+        ("find cat replace with dog", "cat", "dog"),
+        ("swap cat for dog", "cat", "dog"),
+        ("substitute cat with dog", "cat", "dog"),
+        ("apple -> orange", "apple", "orange"),
+        ("replace: apple with orange", "apple", "orange"),
+        ("change the word apple to orange", "apple", "orange"),
+        ("replace all occurrences of apple with orange", "apple", "orange"),
+        ("replace all instances of apple with orange", "apple", "orange"),
+        ("change 2023 to 2024", "2023", "2024"),
+        ("change $100 to $200", "$100", "$200"),
+        ("change 15% to 25%", "15%", "25%"),
+    ],
+)
+def test_all_search_and_replace_phrasings(prompt, expected_find, expected_replace):
+    act, res = intent(prompt)
+    assert act == "replace", f"Failed action for '{prompt}': got {act}"
+    assert res.get("find_text") == expected_find, f"Failed find_text for '{prompt}': got {res.get('find_text')}"
+    assert res.get("replace_text") == expected_replace, f"Failed replace_text for '{prompt}': got {res.get('replace_text')}"

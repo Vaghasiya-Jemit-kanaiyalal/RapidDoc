@@ -989,15 +989,24 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 + index * 0.08 }}
               whileHover={{ y: -4, scale: 1.02 }}
-              className={`relative overflow-hidden rounded-2xl bg-white/90 backdrop-blur-md border ${card.lightBorder} shadow-card hover:shadow-card-hover transition-all duration-300 p-5`}
+              className={`relative overflow-hidden rounded-2xl bg-white/90 backdrop-blur-md border ${card.lightBorder} shadow-card hover:shadow-card-hover transition-all duration-300 p-5 flex flex-col justify-between min-h-[120px]`}
             >
-              <div className="flex flex-col">
-                <p className="text-[11px] uppercase font-bold text-secondary tracking-wider mb-3.5 text-left">{card.label}</p>
-                <div className="flex items-center justify-between">
-                  <div className={`w-12 h-12 rounded-2xl ${card.lightBg} border ${card.lightBorder} flex items-center justify-center shrink-0`}>
-                    <card.icon className={`w-6 h-6 ${card.textColor}`} />
-                  </div>
-                  <p className={`text-3xl font-extrabold ${card.textColor} tabular-nums tracking-tight`}>{card.value}</p>
+              {/* Line 1: Top-Left Text */}
+              <div className="text-left">
+                <p className="text-[11px] sm:text-xs uppercase font-extrabold text-secondary tracking-wider">
+                  {card.label}
+                </p>
+              </div>
+
+              {/* Line 2: Bottom-Left Icon & Bottom-Right Count/Text */}
+              <div className="flex items-end justify-between mt-3">
+                <div className={`w-12 h-12 rounded-2xl ${card.lightBg} border ${card.lightBorder} flex items-center justify-center shrink-0 shadow-2xs`}>
+                  <card.icon className={`w-6 h-6 ${card.textColor}`} />
+                </div>
+                <div className="text-right">
+                  <p className={`text-3xl sm:text-4xl font-black ${card.textColor} tabular-nums tracking-tight leading-none`}>
+                    {card.value}
+                  </p>
                 </div>
               </div>
             </motion.div>

@@ -10,6 +10,7 @@ import { DocumentListSkeleton } from './components/Editor/EditorSkeletons';
 import { DocumentWorkspace } from './components/Editor/DocumentWorkspace';
 import { downloadDocument } from './utils/download';
 import logo from './assets/logo.png';
+import loadingEffect from './assets/laoding_effect.png';
 import FloatingOrbs from './components/FloatingOrbs';
 import { DynamicMorphingPipeline } from './components/Hero/DynamicMorphingPipeline';
 import {
@@ -199,14 +200,17 @@ const LandingPage = ({ onNavigate }) => {
       {/* FIXED TRANSPARENT GLASS NAVBAR (PINNED AT THE TOP)  */}
       {/* ═══════════════════════════════════════════════════ */}
       <nav className="fixed top-0 left-0 right-0 bg-white/25 backdrop-blur-2xl border-b border-white/40 shadow-[0_4px_30px_rgba(0,0,0,0.03)] z-50 transition-all duration-300">
-        <div className="max-w-7xl mx-auto w-full px-6 lg:px-8 h-[76px] flex items-center justify-between">
+        <div className="w-full px-4 sm:px-6 lg:px-8 h-[76px] flex items-center justify-between">
           <button
             onClick={() => onNavigate('landing', 'hero')}
-            className="shrink-0 cursor-pointer rounded-2xl transition hover:scale-105 active:scale-95 flex items-center"
+            className="shrink-0 cursor-pointer rounded-2xl transition hover:scale-105 active:scale-95 flex items-center gap-2.5 group"
             title="Go to Home"
             aria-label="RapidDoc Home"
           >
-            <img src={logo} alt="RapidDoc Logo" className="w-[62px] h-[62px] object-contain drop-shadow-xs" />
+            <img src={loadingEffect} alt="RapidDoc Logo" className="w-[50px] h-[50px] sm:w-[56px] sm:h-[56px] object-contain drop-shadow-xs" />
+            <span className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 group-hover:text-brand-600 transition-colors select-none">
+              Rapid<span className="text-brand-600">Doc</span>
+            </span>
           </button>
 
           <div className="hidden md:flex items-center gap-1.5 p-1.5 rounded-2xl bg-white/50 backdrop-blur-md border border-slate-200/50 shadow-2xs">
@@ -243,27 +247,31 @@ const LandingPage = ({ onNavigate }) => {
           </div>
 
           <div className="flex items-center gap-3">
-            {user && (
+            {user ? (
               <button
                 onClick={() => onNavigate('dashboard')}
-                className="h-[44px] px-5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-2xs hover:shadow-xs transition duration-200 cursor-pointer flex items-center gap-2"
+                className="h-[44px] px-6 rounded-xl bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-extrabold text-sm shadow-[0_4px_16px_rgba(54,92,255,0.35)] hover:shadow-[0_6px_22px_rgba(54,92,255,0.48)] hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer flex items-center gap-2"
               >
                 <span>Dashboard</span>
+                <ArrowRight className="w-4 h-4 text-white/90" />
               </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => onNavigate('login')}
+                  className="h-[44px] px-6 rounded-xl bg-white/90 hover:bg-white text-slate-800 hover:text-brand-600 font-bold text-sm border border-slate-300/80 hover:border-brand-500 shadow-2xs hover:shadow-xs hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer"
+                >
+                  Login
+                </button>
+                <button
+                  onClick={() => onNavigate('register')}
+                  className="group h-[44px] px-6 rounded-xl bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-extrabold text-sm shadow-[0_4px_16px_rgba(54,92,255,0.35)] hover:shadow-[0_6px_22px_rgba(54,92,255,0.48)] hover:scale-[1.03] active:scale-[0.98] transition-all duration-200 cursor-pointer flex items-center gap-2"
+                >
+                  <span>Get Started</span>
+                  <ArrowRight className="w-4 h-4 text-white/90 group-hover:translate-x-0.5 transition-transform" />
+                </button>
+              </>
             )}
-            <button
-              onClick={() => onNavigate('login')}
-              className="h-[44px] px-6 rounded-xl bg-white/90 hover:bg-white text-slate-800 hover:text-brand-600 font-bold text-sm border border-slate-300/80 hover:border-brand-500 shadow-2xs hover:shadow-xs hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer"
-            >
-              Login
-            </button>
-            <button
-              onClick={() => onNavigate('register')}
-              className="group h-[44px] px-6 rounded-xl bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-extrabold text-sm shadow-[0_4px_16px_rgba(54,92,255,0.35)] hover:shadow-[0_6px_22px_rgba(54,92,255,0.48)] hover:scale-[1.03] active:scale-[0.98] transition-all duration-200 cursor-pointer flex items-center gap-2"
-            >
-              <span>Get Started</span>
-              <ArrowRight className="w-4 h-4 text-white/90 group-hover:translate-x-0.5 transition-transform" />
-            </button>
           </div>
         </div>
       </nav>
@@ -271,21 +279,19 @@ const LandingPage = ({ onNavigate }) => {
       {/* ═══════════════════════════════════════════════════ */}
       {/* SECTION 1: HERO                                    */}
       {/* ═══════════════════════════════════════════════════ */}
-      <section id="hero" className="max-w-[1600px] mx-auto w-full px-6 lg:px-12 min-h-screen grid lg:grid-cols-[1.15fr_1.1fr] gap-6 lg:gap-8 items-center pt-28 pb-12 z-10 scroll-mt-24">
+      <section id="hero" className="max-w-[1480px] mx-auto w-full px-6 lg:pl-6 lg:pr-10 min-h-[calc(100vh-76px)] grid lg:grid-cols-[1.2fr_1fr] gap-8 lg:gap-12 items-center pt-24 pb-6 sm:pt-[100px] sm:pb-8 z-10 scroll-mt-24">
         {/* Left Hero */}
         <motion.div 
           initial={{ opacity: 0, x: -30 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1] }}
-          className="flex flex-col items-start text-left"
+          className="flex flex-col items-start text-left w-full pt-5 sm:pt-8"
         >
           {/* Heading */}
-          <h1 className="text-[42px] sm:text-[52px] lg:text-[58px] font-bold text-ink leading-[1.12] tracking-tight mb-6">
-            Work Smarter.
+          <h1 className="text-[32px] sm:text-[40px] lg:text-[46px] font-bold text-ink leading-[1.16] tracking-tight mb-4">
+            Work Smarter, Not Harder.
             <br />
-            Not Harder.
-            <br />
-            <span className="font-script text-brand-600 relative inline-block mt-2">
+            <span className="font-script text-brand-600 relative inline-block mt-1">
               Let RapidDoc Handle It.
               <svg className="absolute left-0 -bottom-3 w-full h-[16px]" viewBox="0 0 420 20" fill="none" preserveAspectRatio="none" aria-hidden="true">
                 <path d="M6 15 C 90 4, 240 3, 414 11" stroke="#365CFF" strokeWidth="7" strokeLinecap="round" opacity="0.45" />
@@ -295,27 +301,26 @@ const LandingPage = ({ onNavigate }) => {
           </h1>
 
           {/* Description */}
-          <p className="text-[18px] sm:text-[20px] lg:text-[22px] leading-[1.6] text-[#4B5563] mb-6 max-w-md">
-            Edit, <span className="text-brand-600 font-medium">understand</span>, and{' '}
-            <span className="text-brand-600 font-medium">transform</span> your documents using the
-            power of AI — all within one seamless platform.
+          <p className="text-[17px] sm:text-[18px] lg:text-[19px] leading-[1.6] text-[#4B5563] mb-5 w-full">
+            Edit, <span className="text-brand-600 font-semibold">understand</span>, and{' '}
+            <span className="text-brand-600 font-semibold">transform</span> your documents using the power of AI — with precision styling, smart summarization, and zero format loss.
           </p>
 
-          {/* Creative 2x2 Capability Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8 w-full max-w-lg">
+          {/* Creative 2x2 Capability Grid — Covering the left part whole */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5 w-full">
             {featurePills.map(({ icon: Icon, label, detail, gradient, border, iconColor, iconBg }, index) => (
               <motion.div 
                 key={label}
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5, delay: 0.15 + index * 0.08 }}
-                whileHover={{ scale: 1.03, y: -2 }}
-                className={`group flex items-center gap-3 p-3 rounded-2xl bg-gradient-to-r ${gradient} bg-white/90 backdrop-blur-md border ${border} shadow-2xs hover:shadow-card transition-all duration-300 cursor-default`}
+                whileHover={{ scale: 1.02, y: -2 }}
+                className={`group flex items-center gap-3 p-3 rounded-2xl bg-gradient-to-r ${gradient} bg-white/90 backdrop-blur-md border ${border} shadow-2xs hover:shadow-card transition-all duration-300 cursor-default w-full`}
               >
                 <div className={`w-10 h-10 rounded-xl ${iconBg} ${iconColor} flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-300`}>
                   <Icon className="w-5 h-5 stroke-[2.2]" />
                 </div>
-                <div className="text-left min-w-0">
+                <div className="text-left min-w-0 flex-1">
                   <div className="text-xs font-extrabold text-ink group-hover:text-brand-600 transition-colors truncate">{label}</div>
                   <div className="text-[10px] text-secondary font-medium truncate">{detail}</div>
                 </div>
@@ -324,15 +329,14 @@ const LandingPage = ({ onNavigate }) => {
           </div>
 
           {/* Creative CTA Action Hub */}
-          <div className="flex flex-wrap items-center gap-3.5 mb-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 w-full">
             {/* Primary Gradient CTA */}
             <motion.button
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               onClick={() => onNavigate(user ? 'dashboard' : 'register')}
-              className="group relative overflow-hidden h-[54px] px-8 rounded-2xl bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-extrabold text-sm sm:text-base shadow-[0_8px_25px_rgba(54,92,255,0.4)] hover:shadow-[0_12px_30px_rgba(54,92,255,0.5)] transition-all flex items-center gap-2.5 cursor-pointer"
+              className="group relative overflow-hidden h-[50px] w-full px-6 rounded-2xl bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 text-white font-extrabold text-sm sm:text-base shadow-[0_8px_25px_rgba(54,92,255,0.4)] hover:shadow-[0_12px_30px_rgba(54,92,255,0.5)] transition-all flex items-center justify-center gap-2.5 cursor-pointer"
             >
-              {/* Shimmer sweep animation */}
               <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/25 to-transparent pointer-events-none" />
               <Sparkles className="w-4 h-4 text-brand-200" />
               <span>{user ? 'Go to Dashboard' : 'Start for Free'}</span>
@@ -341,10 +345,10 @@ const LandingPage = ({ onNavigate }) => {
 
             {/* Secondary Glassmorphic Upload / Workspace CTA */}
             <motion.button
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               onClick={() => onNavigate(user ? 'dashboard' : 'register')}
-              className="h-[54px] px-6 rounded-2xl bg-white text-slate-800 hover:text-brand-600 hover:bg-brand-50/50 border-2 border-slate-200/90 hover:border-brand-500 font-extrabold text-sm sm:text-base flex items-center gap-2.5 shadow-2xs hover:shadow-card transition-all cursor-pointer"
+              className="h-[50px] w-full px-6 rounded-2xl bg-white text-slate-800 hover:text-brand-600 hover:bg-brand-50/50 border-2 border-slate-200/90 hover:border-brand-500 font-extrabold text-sm sm:text-base flex items-center justify-center gap-2.5 shadow-2xs hover:shadow-card transition-all cursor-pointer"
               title="Upload a document and edit it with AI"
             >
               <div className="w-7 h-7 rounded-xl bg-brand-50 text-brand-600 flex items-center justify-center">
@@ -352,39 +356,23 @@ const LandingPage = ({ onNavigate }) => {
               </div>
               <span>{user ? 'Open Your Documents' : 'Upload Document'}</span>
             </motion.button>
-
-            {/* Tertiary Interactive Video/Demo Trigger */}
-            <motion.button
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              onClick={() => { const el = document.getElementById('how'); if (el) el.scrollIntoView({ behavior: 'smooth' }); }}
-              className="h-[54px] px-5.5 rounded-2xl border border-slate-300/80 bg-white/80 hover:bg-white text-slate-700 hover:text-brand-600 font-bold text-sm flex items-center gap-2.5 hover:border-brand-400 transition-all shadow-2xs cursor-pointer"
-            >
-              <span className="relative flex h-7 w-7 items-center justify-center">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-20"></span>
-                <span className="relative inline-flex rounded-full h-6 w-6 bg-brand-50 items-center justify-center">
-                  <Play className="w-3.5 h-3.5 text-brand-600 fill-brand-600" />
-                </span>
-              </span>
-              <span>See How It Works</span>
-            </motion.button>
           </div>
 
-          {/* Testimonial Card */}
+          {/* Testimonial Card — Covering the left part whole */}
           <motion.div 
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.5 }}
-            className="p-5 bg-white rounded-3xl shadow-floating border border-borderline/60 max-w-md mt-9"
+            transition={{ duration: 0.6, delay: 0.4 }}
+            className="p-4 bg-white/95 backdrop-blur-sm rounded-2xl shadow-floating border border-borderline/60 w-full mt-3"
           >
-            <Quote className="w-6 h-6 text-brand-600 mb-2.5" />
-            <p className="text-[13px] text-ink/80 font-medium leading-relaxed mb-3">
+            <Quote className="w-5 h-5 text-brand-600 mb-1.5" />
+            <p className="text-[13px] text-ink/80 font-medium leading-relaxed mb-2.5">
               "RapidDoc has completely changed the way we work with documents. It's like having an
               AI assistant right inside our editor."
             </p>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center">
-                <div className="flex -space-x-2.5">
+                <div className="flex -space-x-2">
                   <div className="w-5 h-5 rounded-full bg-slate-300 border-2 border-white"></div>
                   <div className="w-5 h-5 rounded-full bg-slate-400 border-2 border-white"></div>
                   <div className="w-5 h-5 rounded-full bg-blue-300 border-2 border-white"></div>
@@ -410,22 +398,6 @@ const LandingPage = ({ onNavigate }) => {
         >
           <DynamicMorphingPipeline />
         </motion.div>
-      </section>
-
-      {/* ═══════════════════════════════════════════════════ */}
-      {/* SECTION 2: STATS BAR (TRANSPARENT GLASS)           */}
-      {/* ═══════════════════════════════════════════════════ */}
-      <section className="relative z-10 py-14 bg-transparent">
-        <div className="max-w-5xl mx-auto px-6">
-          <ScrollReveal>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-white/40 backdrop-blur-xl rounded-3xl border border-white/70 shadow-card hover:shadow-card-hover p-4 transition-all duration-300">
-              <StatCounter value={10000} suffix="+" label="Documents Processed" icon={FileText} />
-              <StatCounter value={99} suffix="%" label="Format Accuracy" icon={Shield} />
-              <StatCounter value={24} suffix="" label="AI Edit Intents" icon={Brain} />
-              <StatCounter value={1000} suffix="+" label="Happy Users" icon={Users} />
-            </div>
-          </ScrollReveal>
-        </div>
       </section>
 
       {/* ═══════════════════════════════════════════════════ */}
@@ -495,9 +467,6 @@ const LandingPage = ({ onNavigate }) => {
 
           {/* Steps */}
           <div className="relative">
-            {/* Connecting line */}
-            <div className="hidden lg:block absolute top-[88px] left-[calc(16.67%+28px)] right-[calc(16.67%+28px)] h-[3px] bg-gradient-to-r from-brand-200 via-brand-400 to-brand-200 rounded-full" />
-
             <div className="grid lg:grid-cols-3 gap-8 lg:gap-12">
               {steps.map((step, index) => (
                 <ScrollReveal key={step.num} delay={index * 0.15} direction="up">
@@ -516,6 +485,13 @@ const LandingPage = ({ onNavigate }) => {
                     </div>
                     <h3 className="text-xl font-bold text-ink mb-3">{step.title}</h3>
                     <p className="text-sm text-secondary leading-relaxed max-w-xs">{step.desc}</p>
+
+                    {/* Sleek Step Direction Arrow Connector — Centered exactly in the middle between both cards */}
+                    {index < steps.length - 1 && (
+                      <div className="hidden lg:flex absolute left-[calc(100%+16px)] lg:left-[calc(100%+24px)] top-1/2 -translate-x-1/2 -translate-y-1/2 z-20 w-8 h-8 rounded-full bg-white border border-slate-200/90 shadow-card items-center justify-center text-brand-600 pointer-events-none">
+                        <ArrowRight className="w-4 h-4 stroke-[2.5]" />
+                      </div>
+                    )}
                   </div>
                 </ScrollReveal>
               ))}
@@ -908,15 +884,17 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
 
       {/* Header */}
       <header className="bg-white/80 backdrop-blur-xl border-b border-borderline/40 sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-[72px] flex justify-between items-center">
+        <div className="w-full px-4 sm:px-6 lg:px-8 h-[72px] flex justify-between items-center">
           <button
             onClick={onHome}
-            className="shrink-0 cursor-pointer rounded-2xl transition hover:scale-105 active:scale-95 flex items-center gap-2.5"
+            className="shrink-0 cursor-pointer rounded-2xl transition hover:scale-105 active:scale-95 flex items-center gap-2.5 group"
             title="Go to Home"
             aria-label="RapidDoc Home"
           >
-            <img src={logo} alt="RapidDoc Logo" className="w-[52px] h-[52px] object-contain" />
-            <span className="font-extrabold text-ink text-xl tracking-tight hidden sm:inline">RapidDoc</span>
+            <img src={loadingEffect} alt="RapidDoc Logo" className="w-[46px] h-[46px] object-contain drop-shadow-xs" />
+            <span className="text-xl font-black tracking-tight text-slate-900 group-hover:text-brand-600 transition-colors hidden sm:inline select-none">
+              Rapid<span className="text-brand-600">Doc</span>
+            </span>
           </button>
 
           <div className="flex items-center gap-2.5">

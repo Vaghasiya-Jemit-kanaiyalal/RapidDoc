@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { Mail, Lock, User, Eye, EyeOff, UserPlus, ArrowRight, Sparkles, ShieldCheck, Check } from 'lucide-react';
 import { motion } from 'framer-motion';
-import logo from '../../assets/logo.png';
+import loadingEffect from '../../assets/laoding_effect.png';
 
 export const Register = ({ onToggleMode, onSuccess }) => {
   const { register } = useAuth();
@@ -101,20 +101,11 @@ export const Register = ({ onToggleMode, onSuccess }) => {
         <button 
           onClick={() => onToggleMode('landing')} 
           title="Go to Home" 
-          className="cursor-pointer rounded-2xl transition hover:scale-105 active:scale-95 flex items-center gap-2.5"
+          className="cursor-pointer rounded-2xl transition hover:scale-105 active:scale-95 flex items-center gap-2.5 group"
         >
-          <img src={logo} alt="RapidDoc Logo" className="w-[52px] h-[52px] object-contain" />
+          <img src={loadingEffect} alt="RapidDoc Logo" className="w-[48px] h-[48px] object-contain transition-transform group-hover:scale-105" />
           <span className="font-extrabold text-ink text-xl tracking-tight">RapidDoc</span>
         </button>
-
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => onToggleMode('landing')} 
-            className="text-xs font-bold text-secondary hover:text-brand-600 bg-white/80 backdrop-blur-md px-4 py-2 rounded-xl shadow-xs border border-borderline/60 hover:border-brand-200 transition"
-          >
-            Back to Home
-          </button>
-        </div>
       </header>
 
       {/* Main Centered Card Container */}
@@ -126,8 +117,12 @@ export const Register = ({ onToggleMode, onSuccess }) => {
           className="max-w-[460px] w-full bg-white/85 backdrop-blur-2xl rounded-[32px] p-8 sm:p-10 shadow-floating border border-white/80 text-center relative"
         >
           {/* Top Floating Badge */}
-          <div className="w-14 h-14 mx-auto mb-5 bg-gradient-to-tr from-brand-600 to-indigo-600 rounded-2xl shadow-soft-blue flex items-center justify-center text-white">
-            <UserPlus className="w-6 h-6" />
+          <div className="w-16 h-16 mx-auto mb-5 rounded-2xl border border-slate-200/90 bg-transparent flex items-center justify-center p-2.5 relative group transition-colors duration-200 hover:border-brand-300">
+            <img 
+              src={loadingEffect} 
+              alt="RapidDoc Auth" 
+              className={`w-full h-full object-contain transition-transform duration-300 group-hover:scale-105 ${loading ? 'animate-pulse' : ''}`} 
+            />
           </div>
 
           {/* Title & Subtitle */}

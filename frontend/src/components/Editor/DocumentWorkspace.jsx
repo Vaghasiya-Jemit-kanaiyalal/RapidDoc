@@ -4,7 +4,6 @@ import { API_URL, getAuthHeaders, isAuthExpired } from '../../utils/api';
 import laodingEffect from '../../assets/laoding_effect.png';
 import { HeaderFooterEditor } from './HeaderFooterEditor';
 import { ImageResizeDialog } from './ImageResizeDialog';
-import { PipelineStepper } from './PipelineStepper';
 import { useEditHistory, useUndoRedoShortcuts } from '../../hooks/useEditHistory';
 import { DocumentSkeleton, PreviewSkeleton } from './EditorSkeletons';
 import { 
@@ -1653,30 +1652,6 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           </button>
         </div>
       </div>
-
-      {/* Interactive Pipeline Stepper Header */}
-      <PipelineStepper
-        currentStage={pipelineStage}
-        completionPercent={completionPercent}
-        pipelineStatus={pipelineStatus}
-        onSelectStage={(stage) => {
-          setPipelineStage(stage);
-          const percent = Math.min(100, stage * 25);
-          setCompletionPercent(percent);
-          persistStage(stage);
-          if (stage === 2) {
-            setHfInitialSection('both');
-            setHfModalOpen(true);
-          } else if (stage === 3) {
-            setViewMode('edit');
-          } else if (stage === 4) {
-            handleFinalizePipeline();
-          }
-        }}
-        onSaveProgress={handleSaveProgress}
-        onFinalize={handleFinalizePipeline}
-        savingProgress={savingProgress}
-      />
 
       {/* Main area: centered Word-style document + right logs sidebar */}
       <div className="flex-grow flex min-h-0">

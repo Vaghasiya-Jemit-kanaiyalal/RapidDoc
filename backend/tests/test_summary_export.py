@@ -196,3 +196,24 @@ def test_a_summary_without_key_points_still_exports(client):
     response = export(client, "txt", key_points=[])
     assert response.status_code == 200
     assert PAYLOAD["summary"] in response.content.decode("utf-8")
+
+
+def test_md_export_returns_clean_markdown(client):
+    md_content = "# Document Summary: Test\n\n## Overview\nComplete document coverage."
+    response = export(client, "md", summary=md_content)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/markdown")
+    body = response.content.decode("utf-8")
+    assert body.startswith("# Document Summary: Test")
+    assert "## Overview" in body
+
+
+def test_txt_export_cleans_markdown_syntax(client):
+    md_content = "# Document Summary\n\n## Overview\nThis is **bold** text and `inline_code`."
+    response = export(client, "txt", summary=md_content)
+    assert response.status_code == 200
+    body = response.content.decode("utf-8")
+    assert "**bold**" not in body
+    assert "bold" in body
+    assert "`inline_code`" not in body
+    assert "inline_code" in body

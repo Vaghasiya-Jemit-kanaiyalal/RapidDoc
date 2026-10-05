@@ -55,34 +55,51 @@ logger = logging.getLogger(__name__)
 # Regex rule engine (final fallback)
 # ---------------------------------------------------------------------------
 FALLBACK_HEADER_RE = re.compile(
-    r"change\s+(?:the\s+)?header\s+(?:to|into|as)\s+[\"'“”]?(.+?)['\"“”]?\.?\s*$",
+    r'''(?:^(?:change|set|update|make|add|put)\s+(?:the\s+)?header\s+(?:to|into|as|:)\s+["'“”]?(.+?)['"“”]?\.?$|^header\s*:\s*["'“”]?(.+?)['"“”]?\.?$)''',
     re.IGNORECASE,
 )
 FALLBACK_FOOTER_RE = re.compile(
-    r"change\s+(?:the\s+)?footer\s+(?:to|into|as)\s+[\"'“”]?(.+?)['\"“”]?\.?\s*$",
+    r'''(?:^(?:change|set|update|make|add|put)\s+(?:the\s+)?footer\s+(?:to|into|as|:)\s+["'“”]?(.+?)['"“”]?\.?$|^footer\s*:\s*["'“”]?(.+?)['"“”]?\.?$)''',
     re.IGNORECASE,
 )
-FALLBACK_REPLACE_RE = re.compile(
-    r"^(?:change|replace|edit)\s+(?:the\s+)?[\"'“”]?([^'\"“”]+?)['\"“”]?\s+(?:to|with|by|into|for)\s+[\"'“”]?([^'\"“”]+?)['\"“”]?\.?\s*$",
-    re.IGNORECASE,
-)
-# Tier-3 patterns for the generative intents, so "summarize this" and
-# "make 3 MCQs" still work when every local brain is unavailable.
+FALLBACK_REPLACE_PATTERNS = [
+    # 1. "find X and replace with Y" / "search for X and replace with Y"
+    re.compile(
+        r'''^(?:find|search(?:\s+for)?)\s+["'“”]?([^'"“”]+?)['"“”]?\s+(?:and\s+)?(?:replace|change|swap|substitute)(?:\s+it)?\s+(?:with|to|by|for|into)\s+["'“”]?([^'"“”]+?)['"“”]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
+    # 2. "swap X for Y" / "swap X with Y" / "substitute X for/with Y"
+    re.compile(
+        r'''^(?:swap|substitute)\s+(?:the\s+)?["'“”]?([^'"“”]+?)['"“”]?\s+(?:with|for|to|by)\s+["'“”]?([^'"“”]+?)['"“”]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
+    # 3. Standard "change/replace/edit X to/with/by/into/for Y"
+    re.compile(
+        r'''^(?:change|replace|edit|update)\s+(?:the\s+)?(?:word|phrase|text)?\s*["'“”]?([^'"“”]+?)['"“”]?\s+(?:to|with|by|into|for)\s+["'“”]?([^'"“”]+?)['"“”]?\.?\s*$''',
+        re.IGNORECASE,
+    ),
+]
+FALLBACK_REPLACE_RE = FALLBACK_REPLACE_PATTERNS[2]
+
+# Robust tier-3 patterns for generative intents: summarize, quiz, rewrite
 FALLBACK_SUMMARIZE_RE = re.compile(
-    r"\b(?:summari[sz]e|summari[sz]ation|abstract|tl;?dr)\b", re.IGNORECASE
+    r"\b(?:summar(?:y|ies|i[sz]e|i[sz]ation|i[sz]ing)|abstract|overview|tl;?dr|recap|briefing)\b",
+    re.IGNORECASE,
 )
 FALLBACK_SUMMARIZE_PAGE_RE = re.compile(
     r"\bpage\s+(\d+|first|last|cover)\b", re.IGNORECASE
 )
 FALLBACK_MCQ_RE = re.compile(
-    r"\b(?:mcqs?|multiple[\s-]choice\s+questions?)\b", re.IGNORECASE
+    r"\b(?:mcqs?|multiple[\s-]choice(?:\s+questions?)?|questions?|quiz(?:zes)?|test\s+questions?|assessment)\b",
+    re.IGNORECASE,
+)
+FALLBACK_REWRITE_RE = re.compile(
+    r"\b(?:rewrite|rephrase|paraphrase|proofread|correct|fix\s+grammar|improve\s+writing|make\s+it\s+(?:formal|casual|concise|professional|clearer)|shorten|expand)\b",
+    re.IGNORECASE,
 )
 _COUNT_RE = re.compile(r"\b(\d+)\b")
 
 # "replace the logo", "swap the image on page 2", "change the picture".
-# No target is captured on purpose: image_resolver.resolve_image_targets reads
-# the document's real image list, and a regex-captured number would bypass that
-# validation and could name an image that does not exist.
 FALLBACK_REPLACE_IMAGE_RE = re.compile(
     r"\b(?:image|picture|photo|figure|diagram|logo|graphic|chart|icon|"
     r"watermark|banner|thumbnail)\b",
@@ -110,28 +127,27 @@ def _clean_find_text(value):
 def _fallback_intent(prompt: str, has_image_upload: bool = False) -> dict:
     m = FALLBACK_HEADER_RE.search(prompt)
     if m:
-        return {"action": "header", "new_text": m.group(1).strip()}
+        val = m.group(1) or m.group(2)
+        if val:
+            return {"action": "header", "new_text": val.strip()}
     m = FALLBACK_FOOTER_RE.search(prompt)
     if m:
-        return {"action": "footer", "new_text": m.group(1).strip()}
+        val = m.group(1) or m.group(2)
+        if val:
+            return {"action": "footer", "new_text": val.strip()}
 
-    # Image intent is checked before the text-replace pattern because
-    # "replace the image on page 2 with this" matches FALLBACK_REPLACE_RE, and
-    # the text path would then look for the literal words "the image on page 2"
-    # in the document body. Requiring an uploaded image keeps this from firing on
-    # an ordinary phrasing like "replace the phrase 'image on page'".
     if has_image_upload and FALLBACK_REPLACE_IMAGE_RE.search(prompt):
         return {"action": "replace_image"}
 
-    m = FALLBACK_REPLACE_RE.match(prompt)
-    if m:
-        return {
-            "action": "replace",
-            "find_text": _clean_find_text(m.group(1)),
-            "replace_text": _clean_find_text(m.group(2)),
-        }
-    # Generative intents. Checked last: these keywords are broad enough that
-    # a header/replace phrasing must always win.
+    for r in FALLBACK_REPLACE_PATTERNS:
+        m = r.match(prompt)
+        if m:
+            return {
+                "action": "replace",
+                "find_text": _clean_find_text(m.group(1)),
+                "replace_text": _clean_find_text(m.group(2)),
+            }
+
     if FALLBACK_MCQ_RE.search(prompt):
         count = 5
         cm = _COUNT_RE.search(prompt)
@@ -158,9 +174,7 @@ def _fallback_intent(prompt: str, has_image_upload: bool = False) -> dict:
                 (key for key, _ in SUMMARY_LENGTH_HINTS if key in prompt.lower()), None
             ),
         }
-    # Proofreading the whole document. Without this a "fix the grammar" command
-    # fell through to "unknown" and the user got no response at all.
-    if GRAMMAR_INTENT_RE.search(prompt):
+    if FALLBACK_REWRITE_RE.search(prompt) or GRAMMAR_INTENT_RE.search(prompt):
         return {
             "action": "rewrite",
             "instruction": prompt.strip(),
@@ -441,15 +455,20 @@ def understand_command(prompt: str, has_image_upload: bool = False) -> dict:
             local.get("confidence", 0.0), threshold, prompt,
         )
 
-    # 2) Gemini fallback ----------------------------------------------------
+    # 2) High-precision rule engine (instant, deterministic, offline) --------
+    rule_intent = _fallback_intent(prompt, has_image_upload)
+    if rule_intent.get("action") != "unknown":
+        rule_intent.setdefault("engine", "regex")
+        logger.info("Rule engine resolved command '%s' -> %s", prompt, rule_intent["action"])
+        return rule_intent
+
+    # 3) Gemini fallback ----------------------------------------------------
     gemini_intent = _understand_with_gemini(prompt, has_image_upload)
     if gemini_intent:
         return gemini_intent
 
-    # 3) Deterministic regex engine -----------------------------------------
-    fallback = _fallback_intent(prompt, has_image_upload)
-    fallback.setdefault("engine", "regex")
-    return fallback
+    rule_intent.setdefault("engine", "regex")
+    return rule_intent
 
 
 def rewrite_text(instruction: str, text: str) -> dict:
@@ -928,119 +947,14 @@ def _conclusion_summary(sentences: list, text: str, max_tokens, topup: list = No
     return " ".join(candidate for _, candidate in chosen).strip()
 
 
-def summarize_document(text: str, length_hint=None) -> dict:
-    """Summarize `text` with the local BART brain, then Gemini.
+def summarize_document(text: str, length_hint=None, title: str = "Document") -> dict:
+    """Summarize `text` using hierarchical section-aware complete document understanding.
 
-    Returns {"summary", "engine", "message"}. `summary` is None when no engine
-    could handle the text, so the caller can return a clean 503.
+    Processes all sections of the document, preventing truncation and partial summaries,
+    and returns a structured Markdown summary.
     """
-    # A notebook or a code-heavy practical is mostly source. Summarising that
-    # verbatim produced paragraphs made of `df.shape` and `plt.title(...)`, so the
-    # code comes out first and the summariser only ever sees what a human wrote.
-    text = clean_prose((text or "").strip())
-    if not text:
-        return {
-            "summary": None,
-            "engine": "none",
-            "summary_source": "document",
-            "key_points": [],
-            "message": "There is no readable text to summarize in this document.",
-        }
-
-    max_tokens = _summary_max_tokens(length_hint)
-
-    # A report's own Conclusion section is the most faithful summary of what was
-    # achieved, so it is preferred over a model paraphrase of the whole file.
-    conclusion_body = _find_conclusion_section(text)
-    if conclusion_body:
-        conclusion_sents = _conclusion_sentences(conclusion_body)
-        # A "Conclusion" heading followed by nothing but code fragments is not a
-        # conclusion; fall through to the whole-document summary instead.
-        points = _key_points(conclusion_sents)
-        if points:
-            # Anything in the report body that is not already part of the
-            # conclusion can top the summary up when the conclusion alone is
-            # smaller than the requested length.
-            #
-            # The pool is built from prose sentences only. Feeding it raw
-            # `split_sentences(text)` output welded each heading onto the sentence
-            # under it, so a summary read
-            #   "...churn model. Introduction to EDA The Telco dataset contains..."
-            # and then repeated a conclusion sentence it was supposed to exclude.
-            topup = _topup_sentences(text, conclusion_sents)
-            clean = _conclusion_summary(conclusion_sents, text, max_tokens, topup)
-            clean = _validated_summary(clean, text) if clean else ""
-            if clean:
-                clean = ensure_sentence(clean)
-                logger.info(
-                    "Summarised from the document's conclusion section (%d points).",
-                    len(points),
-                )
-                return {
-                    "summary": clean,
-                    "engine": "conclusion",
-                    "summary_source": "conclusion",
-                    "key_points": points,
-                    "message": (
-                        "Summarised from the document's own conclusion section."
-                    ),
-                }
-
-    extractive = _extractive_summary(text, max_tokens)
-
-    local_result = summarize(text, max_new_tokens=max_tokens)
-    local_clean = _validated_summary(local_result, text) if local_result else None
-    if local_clean:
-        logger.info(
-            "Local summarizer brain summarised %d chars -> %d chars (validated).",
-            len(text), len(local_clean),
-        )
-        return {
-            "summary": local_clean,
-            "engine": "local",
-            "summary_source": "document",
-            "key_points": _key_points(split_sentences(local_clean)),
-            "message": "Summarised by the local BART brain.",
-        }
-    if local_result:
-        logger.info(
-            "Local summary rejected by validation (grounding/completeness); "
-            "falling back to extractive."
-        )
-
-    # A summary that invents or garbles content is worse than no summary, so the
-    # document's own key sentences are the floor every engine has to beat.
-    if extractive:
-        return {
-            "summary": extractive,
-            "engine": "extractive",
-            "summary_source": "document",
-            "key_points": _key_points(split_sentences(extractive)),
-            "message": (
-                "Summarised from the document's own key sentences, because the "
-                "local model produced an unreliable summary."
-            ),
-        }
-
-    gemini_result = _summarize_with_gemini(text, max_tokens)
-    gemini_clean = _validated_summary(gemini_result, text) if gemini_result else None
-    if gemini_clean:
-        return {
-            "summary": gemini_clean,
-            "engine": "gemini",
-            "summary_source": "document",
-            "key_points": _key_points(split_sentences(gemini_clean)),
-            "message": "Summarised by Gemini.",
-        }
-
-    logger.error("No summarization engine available for %d chars of text.", len(text))
-    return {
-        "summary": None,
-        "engine": "none",
-        "summary_source": "document",
-        "key_points": [],
-        "message": "No summarization engine is available right now. Please try again shortly.",
-    }
+    from RapidDoc.backend.app.services.document_summarizer import generate_complete_document_summary
+    return generate_complete_document_summary(text, doc_title=title or "Document", length_hint=length_hint)
 
 
 # ---------------------------------------------------------------------------
@@ -1284,4 +1198,4 @@ def generate_mcqs(text: str, count: int = 5) -> dict:
 def brains_health():
     """Which brains are loaded - surfaced by GET /api/ai/brains."""
     return brain_status()
-
+

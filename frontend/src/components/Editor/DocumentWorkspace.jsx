@@ -3,6 +3,7 @@ import { downloadDocument, downloadFormats } from '../../utils/download';
 import { API_URL, getAuthHeaders, isAuthExpired } from '../../utils/api';
 import laodingEffect from '../../assets/laoding_effect.png';
 import { HeaderFooterEditor } from './HeaderFooterEditor';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import { ImageResizeDialog } from './ImageResizeDialog';
 import { useEditHistory, useUndoRedoShortcuts } from '../../hooks/useEditHistory';
 import { DocumentSkeleton, PreviewSkeleton } from './EditorSkeletons';
@@ -34,6 +35,7 @@ const PPTX_THEMES = [
 
 /** Summary export formats, matching what the server's summary_export accepts. */
 const SUMMARY_FORMATS = [
+  { value: 'md', label: 'MD' },
   { value: 'txt', label: 'TXT' },
   { value: 'docx', label: 'DOCX' },
   { value: 'pdf', label: 'PDF' },
@@ -1222,6 +1224,15 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
               ? `Generated ${got} of ${data.requested} requested question(s)${from}.`
               : `Generated ${got} question(s)${from}.`
         );
+      } else if (data.action === 'rewrite') {
+        setAiResult(data.message || 'Rewritten text:');
+        if (data.rewritten_text) {
+          setAiSummary({
+            summary: `# Rewritten Text\n\n${data.rewritten_text}`,
+            source: 'document',
+            engine: data.engine || 'local',
+          });
+        }
       } else {
         setAiResult(data.message || 'I scanned your document. Try e.g. \'Change print to not print\' or \'Change the header to RapidDoc Report\'.');
       }
@@ -2496,7 +2507,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                   {summaryExportError}
                 </p>
               )}
-              {aiSummary.summary_source === 'conclusion' && (
+              {aiSummary.summary_source === 'conclusion' && !aiSummary.summary?.includes('## Conclusion') && (
                 <div className="mt-1.5 mb-2 rounded-xl bg-white/70 border border-indigo-100 px-2.5 py-2">
                   <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-500 mb-1">
                     From the conclusion
@@ -2514,9 +2525,9 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                   </ul>
                 </div>
               )}
-              <p className="mt-1.5 text-[11px] leading-relaxed text-slate-700 whitespace-pre-line">
-                {aiSummary.summary}
-              </p>
+              <div className="mt-2 text-slate-700 bg-white/90 rounded-2xl p-3.5 border border-indigo-100/90 shadow-2xs max-h-96 overflow-y-auto">
+                <MarkdownRenderer content={aiSummary.summary} />
+              </div>
             </div>
           )}
 

@@ -1834,7 +1834,8 @@ async def ai_command_endpoint(
                     "message": "I could not find any readable text to summarize in this document.",
                 }
 
-            result = await run_in_threadpool(summarize_document, source_text, length)
+            doc_title = doc.get("name") or doc.get("title") or "Document"
+            result = await run_in_threadpool(summarize_document, source_text, length, doc_title)
             current_date = datetime.now().strftime("%Y-%m-%d")
             db.documents.update_one(
                 {"_id": ObjectId(doc_id)},
@@ -1910,6 +1911,42 @@ async def ai_command_endpoint(
                 "requested": result["requested"],
                 "questions": result["questions"],
                 "message": result["message"],
+            }
+
+        if action == "rewrite":
+            source_text = _explicit_text(request)
+            source_label = "provided text" if source_text else "whole document"
+            if not source_text:
+                source_text = await run_in_threadpool(
+                    _document_text, file_path, doc["file_type"]
+                )
+            if not source_text:
+                return {
+                    "status": "success",
+                    "action": "unknown",
+                    "engine": intent.get("engine"),
+                    "message": "I could not find any readable text to rewrite in this document.",
+                }
+            instruction = intent.get("instruction") or request.command
+            result = await run_in_threadpool(rewrite_text, instruction, source_text[:2500])
+            rewritten = result.get("rewritten_text") or ""
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {
+                    "date": current_date,
+                    "action": f"AI Rewrite ({result.get('engine')}): {instruction[:40]}"
+                }}}
+            )
+            return {
+                "status": "success",
+                "action": "rewrite",
+                "intent": intent.get("intent"),
+                "engine": result.get("engine"),
+                "instruction": instruction,
+                "rewritten_text": rewritten,
+                "source": source_label,
+                "message": result.get("message") or f"Rewritten following instruction '{instruction}'.",
             }
 
         return {"status": "success", "action": "unknown", "intent": intent.get("intent"), "engine": intent.get("engine"), "message": "I scanned your document. Try e.g. 'Change print to not print' or 'Change the header to RapidDoc Report'."}
@@ -2135,8 +2172,9 @@ async def summarize_document_endpoint(
                 detail="No readable text could be extracted from this document.",
             )
 
+        doc_title = doc.get("name") or doc.get("title") or "Document"
         result = await run_in_threadpool(
-            summarize_document, source_text, request.length
+            summarize_document, source_text, request.length, doc_title
         )
 
         current_date = datetime.now().strftime("%Y-%m-%d")

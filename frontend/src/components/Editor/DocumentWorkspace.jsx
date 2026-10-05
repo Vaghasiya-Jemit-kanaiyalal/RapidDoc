@@ -495,6 +495,8 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   const [imageInventory, setImageInventory] = useState([]);
   const [resizeTarget, setResizeTarget] = useState(null); // the chosen inventory entry
   const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [showImageModule, setShowImageModule] = useState(false);
+  const [slashMenuOpen, setSlashMenuOpen] = useState(false);
 
   // Rollback timeline. `edit_history` below is prose; these are the entries that
   // hold file bytes, which is what makes a restore possible.
@@ -912,6 +914,30 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   };
 
   /**
+   * Fetch full list of detected images in this document for the image module and resizing.
+   */
+  const fetchImageInventory = useCallback(async () => {
+    setInventoryLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/images`, {
+        headers: getAuthHeaders(),
+      });
+      if (isAuthExpired(res)) return [];
+      const data = await res.json();
+      if (res.ok) {
+        const images = data.images || [];
+        setImageInventory(images);
+        return images;
+      }
+    } catch (err) {
+      console.error('Failed to load image inventory:', err);
+    } finally {
+      setInventoryLoading(false);
+    }
+    return [];
+  }, [doc.id]);
+
+  /**
    * Hover "Resize" on an image: open the sizing dialog with the server's own
    * numbers. The inventory is fetched on demand and cached, because the drawn
    * size changes as soon as a resize is applied - it is dropped at the same time
@@ -1054,6 +1080,36 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     if (!file) return;
     if (promptImage?.previewUrl) URL.revokeObjectURL(promptImage.previewUrl);
     setPromptImage({ file, previewUrl: URL.createObjectURL(file) });
+    setShowImageModule(true);
+    fetchImageInventory();
+    if (!aiPrompt.trim() || aiPrompt === '/image') {
+      setAiPrompt('replace the image 1 by this');
+    }
+  };
+
+  /** Clipboard paste support for command bar */
+  const handleCommandPaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          if (promptImage?.previewUrl) URL.revokeObjectURL(promptImage.previewUrl);
+          const ext = item.type.split('/')[1] || 'png';
+          const namedFile = new File([file], `pasted-image-${Date.now()}.${ext}`, { type: item.type });
+          setPromptImage({ file: namedFile, previewUrl: URL.createObjectURL(namedFile), isPasted: true });
+          setShowImageModule(true);
+          fetchImageInventory();
+          if (!aiPrompt.trim() || aiPrompt === '/image') {
+            setAiPrompt('replace the image 1 by this');
+          }
+          break;
+        }
+      }
+    }
   };
 
   const clearPromptImage = () => {
@@ -1101,12 +1157,13 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         throw new Error(data.detail || data.message || 'The image could not be replaced.');
       }
       setImagesVersion((v) => v + 1);
-      const text = data.message || 'Image replaced.';
+      const text = data.message || `Image ${index + 1} replaced successfully.`;
       setImageReplaceNotice({ tone: 'success', text });
       setAiResult(text);
       setAiInteractiveMode('none');
       clearPromptImage();
       refreshFullPreview();
+      fetchImageInventory();
     } catch (err) {
       setImageReplaceNotice({ tone: 'error', text: err.message || 'The image could not be replaced.' });
     } finally {
@@ -1115,10 +1172,54 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   };
 
   const handleAiSubmit = async (e) => {
-    e.preventDefault();
+    e?.preventDefault();
     const prompt = aiPrompt.trim();
     const attachedFile = promptImage?.file || null;
     if ((!prompt && !attachedFile) || aiProcessing) return;
+
+    // Direct /image command support
+    const lower = prompt.toLowerCase();
+    if (lower === '/image' || lower === '/images' || lower === 'image' || lower === '/img') {
+      setAiPrompt('');
+      setShowImageModule(true);
+      setAiProcessing(true);
+      try {
+        const imgs = await fetchImageInventory();
+        const count = imgs.length;
+        setAiResult(
+          count > 0
+            ? `📸 Image Module: Detected ${count} image${count !== 1 ? 's' : ''} (numbered 1 to ${count}) in this document. Paste or select an image to replace.`
+            : 'No images detected in this document.'
+        );
+      } catch (err) {
+        setAiResult(`Error loading images: ${err.message}`);
+      } finally {
+        setAiProcessing(false);
+      }
+      return;
+    }
+
+    // Direct "replace the image 1 by this" support when an image is attached/pasted
+    if (attachedFile) {
+      const match = prompt.match(/\b(?:replace|replce|swap|change|put)\s+(?:the\s+)?(?:image|picture|photo|#|number\s+|no\.?\s*)?(\d+)\b/i)
+        || prompt.match(/\b(?:the\s+)?(?:image|picture|photo)\s+(?:#|number\s+|no\.?\s*)?(\d+)\b/i);
+
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num >= 1) {
+          const targetIndex = num - 1;
+          setAiProcessing(true);
+          setAiPrompt('');
+          setAiResult(`Replacing Image ${num} with uploaded picture...`);
+          try {
+            await uploadPromptReplacement(targetIndex, attachedFile, prompt);
+          } finally {
+            setAiProcessing(false);
+          }
+          return;
+        }
+      }
+    }
 
     setAiProcessing(true);
     // Clear immediately, before awaiting anything. Leaving the text in the box
@@ -1161,7 +1262,13 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         throw new Error(data.detail || 'AI command failed');
       }
 
-      if (data.action === 'replace_image') {
+      if (data.action === 'image_module') {
+        setShowImageModule(true);
+        if (data.images) {
+          setImageInventory(data.images);
+        }
+        setAiResult(data.message || `Detected ${data.count || 0} image(s).`);
+      } else if (data.action === 'replace_image') {
         // Nothing is written here. The backend resolved which image the phrase
         // names; if it was unambiguous we go straight to the upload, otherwise
         // the candidate list becomes a picker.
@@ -2338,7 +2445,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
 
     {/* Bottom ChatGPT-style AI Chat Bar */}
       <div className="shrink-0 bg-white border-t border-slate-200 px-4 sm:px-6 py-3">
-        <form onSubmit={handleAiSubmit} className="max-w-4xl mx-auto">
+        <form onSubmit={handleAiSubmit} onPaste={handleCommandPaste} className="max-w-4xl mx-auto">
           {aiResult && (
             <div className={`mb-2 flex items-start gap-2 text-xs font-semibold ${
               aiResult.startsWith('Error') ? 'text-red-600' : 'text-emerald-700'
@@ -2349,6 +2456,152 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                 <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               )}
               <span>{aiResult}</span>
+            </div>
+          )}
+
+          {/* Document Images Module */}
+          {showImageModule && (
+            <div className="mb-3 rounded-2xl border border-blue-200 bg-gradient-to-b from-blue-50/90 to-indigo-50/60 backdrop-blur-sm p-3.5 shadow-sm transition-all animate-in fade-in slide-in-from-bottom-2 duration-200">
+              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-blue-100">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-blue-600 text-white shadow-xs">
+                    <ImageIcon className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-800">Document Images Module</span>
+                      <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-blue-100 text-blue-700 border border-blue-200">
+                        {inventoryLoading ? 'Scanning…' : `${imageInventory.length} detected`}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-500">
+                      {promptImage
+                        ? 'Image ready! Click "Replace" on any card below or type "replace the image 1 by this".'
+                        : 'Inspect images (Image 1, 2, 3...) • Paste or attach an image in the command bar to replace.'}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => fetchImageInventory()}
+                    disabled={inventoryLoading}
+                    className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-100/60 rounded-lg transition"
+                    title="Refresh detected images"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${inventoryLoading ? 'animate-spin text-blue-600' : ''}`} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowImageModule(false)}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                    title="Close images module"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {inventoryLoading && imageInventory.length === 0 ? (
+                <div className="flex items-center justify-center py-6 gap-2 text-xs font-medium text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                  <span>Scanning document for images…</span>
+                </div>
+              ) : imageInventory.length === 0 ? (
+                <div className="py-6 text-center">
+                  <ImageIcon className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />
+                  <p className="text-xs font-semibold text-slate-600">No images detected in this document</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">This document does not contain any embedded pictures.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 max-h-64 overflow-y-auto pr-1">
+                  {imageInventory.map((img, i) => {
+                    const imageNumber = i + 1;
+                    const isReplacingThis = replacingImageIndex === img.index;
+                    return (
+                      <div
+                        key={img.index}
+                        className={`group/card relative rounded-xl border bg-white p-2.5 shadow-2xs transition-all hover:shadow-md ${
+                          promptImage
+                            ? 'border-blue-300 hover:border-blue-500 ring-2 ring-blue-100'
+                            : 'border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        {/* Numbering Header: Image 1, Image 2, etc. */}
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-600 text-white text-[11px] font-black tracking-wide shadow-2xs">
+                            Image {imageNumber}
+                          </span>
+                          {img.page_num != null && (
+                            <span className="text-[9px] font-semibold text-slate-400 bg-slate-50 border border-slate-100 px-1.5 py-0.5 rounded">
+                              Page {img.page_num + 1}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Image Preview */}
+                        <div className="h-24 w-full bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-center overflow-hidden mb-2 relative">
+                          {isReplacingThis ? (
+                            <div className="flex flex-col items-center gap-1 text-[10px] text-blue-600 font-bold">
+                              <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                              <span>Replacing…</span>
+                            </div>
+                          ) : (
+                            <DocumentImage
+                              docId={doc.id}
+                              index={img.index}
+                              maxHeight={86}
+                              version={imagesVersion}
+                              className="max-h-full max-w-full object-contain"
+                            />
+                          )}
+                        </div>
+
+                        {/* Image details */}
+                        <p className="text-[10px] font-medium text-slate-600 truncate mb-2" title={img.label}>
+                          {img.label || `Image ${imageNumber}`}
+                        </p>
+
+                        {/* Actions */}
+                        {promptImage ? (
+                          <button
+                            type="button"
+                            disabled={replacingImageIndex !== null}
+                            onClick={() => uploadPromptReplacement(img.index, promptImage.file, `replace image ${imageNumber} by this`)}
+                            className="w-full py-1.5 px-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 text-white text-[10px] font-bold rounded-lg shadow-xs flex items-center justify-center gap-1 transition"
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            <span>Replace #{imageNumber}</span>
+                          </button>
+                        ) : (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                pendingImageIndexRef.current = img.index;
+                                imagePickInputRef.current?.click();
+                              }}
+                              className="flex-1 py-1 px-1.5 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 text-[10px] font-semibold rounded-md border border-slate-200 transition text-center truncate"
+                            >
+                              Upload
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAiPrompt(`replace the image ${imageNumber} by this`);
+                              }}
+                              title={`Insert "replace the image ${imageNumber} by this" into command bar`}
+                              className="py-1 px-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] font-bold rounded-md border border-blue-200 transition"
+                            >
+                              Select
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -2701,19 +2954,21 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           })()}
 
           {promptImage && (
-            <div className="mb-2 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50/60 px-3 py-2">
+            <div className="mb-2 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50/70 px-3 py-2 shadow-2xs">
               <img
                 src={promptImage.previewUrl}
                 alt="Replacement to upload"
-                className="h-12 w-auto object-contain rounded-lg bg-white border border-slate-200"
+                className="h-12 w-auto object-contain rounded-lg bg-white border border-slate-200 shadow-2xs"
               />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-xs font-bold text-slate-700">
-                  {promptImage.file.name}
+                <span className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                  <span className="px-1.5 py-0.5 rounded bg-blue-600 text-white text-[9px] font-black tracking-wide">
+                    {promptImage.isPasted ? 'PASTED' : 'ATTACHED'}
+                  </span>
+                  <span className="truncate">{promptImage.file.name}</span>
                 </span>
-                <span className="block text-[10px] text-slate-500">
-                  Tell RapidDoc which image to swap it for, e.g. &ldquo;the image on page 2&rdquo;
-                  or &ldquo;image 3&rdquo;.
+                <span className="block text-[10px] text-slate-500 mt-0.5">
+                  Ready to replace! Type &ldquo;replace the image 1 by this&rdquo; or click &ldquo;Replace&rdquo; on any image above.
                 </span>
               </span>
               <button
@@ -2728,12 +2983,131 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
             </div>
           )}
 
+          {/* Slash Commands Dropdown */}
+          {slashMenuOpen && (
+            <div className="mb-2 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg flex flex-col gap-0.5 animate-in fade-in slide-in-from-bottom-2 duration-150">
+              <span className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Slash Commands</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setAiPrompt('');
+                  setSlashMenuOpen(false);
+                  setShowImageModule(true);
+                  fetchImageInventory();
+                }}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-left rounded-lg hover:bg-blue-50 hover:text-blue-700 text-xs text-slate-700 font-medium transition"
+              >
+                <div className="p-1 rounded bg-blue-100 text-blue-600 font-bold text-[10px]">/image</div>
+                <div>
+                  <span className="font-bold">Image Module</span>
+                  <span className="text-[10px] text-slate-400 ml-1.5">Detect, view & replace document images</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAiPrompt('Summarize this document');
+                  setSlashMenuOpen(false);
+                }}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-left rounded-lg hover:bg-indigo-50 hover:text-indigo-700 text-xs text-slate-700 font-medium transition"
+              >
+                <div className="p-1 rounded bg-indigo-100 text-indigo-600 font-bold text-[10px]">/summarize</div>
+                <div>
+                  <span className="font-bold">Summarize Document</span>
+                  <span className="text-[10px] text-slate-400 ml-1.5">Create concise summary</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAiPrompt('Generate 5 MCQs');
+                  setSlashMenuOpen(false);
+                }}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-left rounded-lg hover:bg-amber-50 hover:text-amber-700 text-xs text-slate-700 font-medium transition"
+              >
+                <div className="p-1 rounded bg-amber-100 text-amber-600 font-bold text-[10px]">/quiz</div>
+                <div>
+                  <span className="font-bold">Quiz Generator</span>
+                  <span className="text-[10px] text-slate-400 ml-1.5">5 interactive MCQs</span>
+                </div>
+              </button>
+            </div>
+          )}
+
+          {/* Quick command chips */}
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowImageModule((prev) => {
+                    const next = !prev;
+                    if (next) fetchImageInventory();
+                    return next;
+                  });
+                }}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition border ${
+                  showImageModule
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300 hover:text-blue-600'
+                }`}
+              >
+                <ImageIcon className="w-3.5 h-3.5" />
+                <span>/image</span>
+                {imageInventory.length > 0 && (
+                  <span className={`px-1.5 py-0.2 rounded-full text-[9px] font-black ${
+                    showImageModule ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'
+                  }`}>
+                    {imageInventory.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiPrompt('Summarize this document')}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-indigo-300 hover:text-indigo-600 transition"
+              >
+                /summarize
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiPrompt('Generate 5 MCQs')}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-amber-300 hover:text-amber-600 transition"
+              >
+                /quiz
+              </button>
+            </div>
+            {promptImage && (
+              <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                📋 Pasted Picture Ready
+              </span>
+            )}
+          </div>
+
           <div className="relative rounded-2xl border border-slate-200 bg-slate-50 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition shadow-sm">
             <input
               type="text"
               value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder='Ask RapidDoc AI... e.g. "Change 24DCS044 to 145", "Replace the image on page 2" (attach a picture), "Summarize this document" or "Generate 5 MCQs"'
+              onChange={(e) => {
+                const val = e.target.value;
+                setAiPrompt(val);
+                if (val === '/') {
+                  setSlashMenuOpen(true);
+                } else if (slashMenuOpen && !val.startsWith('/')) {
+                  setSlashMenuOpen(false);
+                }
+                if (val.trim().toLowerCase() === '/image' || val.trim().toLowerCase() === '/images') {
+                  setShowImageModule(true);
+                  fetchImageInventory();
+                  setSlashMenuOpen(false);
+                }
+              }}
+              onPaste={handleCommandPaste}
+              placeholder={
+                promptImage
+                  ? 'Type "replace the image 1 by this" or click an image above to replace'
+                  : 'Ask RapidDoc AI... type /image to inspect images, paste an image to replace, e.g. "replace the image 1 by this"'
+              }
               disabled={aiProcessing}
               className="w-full bg-transparent py-3 pl-4 pr-24 outline-none text-sm text-slate-700 disabled:opacity-50 placeholder:text-slate-400"
             />

@@ -175,7 +175,10 @@ def _fallback_intent(prompt: str, has_image_upload: bool = False) -> dict:
         if val:
             return {"action": "footer", "new_text": val.strip()}
 
-    if has_image_upload and FALLBACK_REPLACE_IMAGE_RE.search(prompt):
+    if re.match(r"^/?images?\b", prompt.strip(), re.I) or re.search(r"\b(?:list|show|detect|inspect|view)\s+(?:all\s+)?images\b", prompt, re.I):
+        return {"action": "image_module"}
+
+    if has_image_upload and (FALLBACK_REPLACE_IMAGE_RE.search(prompt) or re.search(r"\b(?:repl[a-z]*|swap|put|change)\b.*?\b\d+\b", prompt, re.I)):
         return {"action": "replace_image"}
 
     for r in FALLBACK_REPLACE_PATTERNS:
@@ -466,10 +469,13 @@ def understand_command(prompt: str, has_image_upload: bool = False) -> dict:
     if not prompt:
         return {"action": "unknown"}
 
+    if re.match(r"^/?images?\b", prompt.strip(), re.I) or re.search(r"\b(?:list|show|detect|inspect|view)\s+(?:all\s+)?images\b", prompt, re.I):
+        return {"action": "image_module", "engine": "rule"}
+
     # An attached image plus any image-ish wording is unambiguous, so answer it
     # from the rules without consulting the local brain: it has no image class
     # and would otherwise steer the request toward a text replace.
-    if has_image_upload and FALLBACK_REPLACE_IMAGE_RE.search(prompt):
+    if has_image_upload and (FALLBACK_REPLACE_IMAGE_RE.search(prompt) or re.search(r"\b(?:repl[a-z]*|swap|put|change)\b.*?\b\d+\b", prompt, re.I)):
         logger.info("Image upload + image wording '%s' -> replace_image (regex)", prompt)
         return {"action": "replace_image", "engine": "regex"}
 

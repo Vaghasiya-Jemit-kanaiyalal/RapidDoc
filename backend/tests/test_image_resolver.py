@@ -220,6 +220,14 @@ def test_docx_page_reference_is_not_answered_with_a_wrong_page(docx_images):
     assert result["status"] != "resolved", result
 
 
+def test_replace_image_1_by_this_phrases(multipage_pdf):
+    assert indexes("replace the image 1 by this", multipage_pdf) == [0]
+    assert indexes("replace image 1 by this", multipage_pdf) == [0]
+    assert indexes("replace image 1 with this", multipage_pdf) == [0]
+    assert indexes("replace 1 by this", multipage_pdf) == [0]
+    assert indexes("replace image 2 by this", multipage_pdf) == [1]
+
+
 # ---------------------------------------------------------------------------
 # Upload validation
 # ---------------------------------------------------------------------------

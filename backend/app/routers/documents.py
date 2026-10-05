@@ -1775,6 +1775,33 @@ async def ai_command_endpoint(
                 "changes": [{"paragraph": action.capitalize(), "old_text": "", "new_text": new_text}],
             }
 
+        if action == "image_module":
+            if doc["file_type"] not in ("docx", "pdf"):
+                return {
+                    "status": "success",
+                    "action": "image_module",
+                    "engine": intent.get("engine", "rule"),
+                    "count": 0,
+                    "images": [],
+                    "message": f"Image detection is not supported for .{doc['file_type']} files.",
+                }
+            inventory = await run_in_threadpool(
+                build_image_inventory, file_path, doc["file_type"]
+            )
+            count = len(inventory)
+            return {
+                "status": "success",
+                "action": "image_module",
+                "engine": intent.get("engine", "rule"),
+                "count": count,
+                "images": _public_inventory(inventory),
+                "message": (
+                    f"Detected {count} image{'s' if count != 1 else ''} in this document."
+                    if count > 0
+                    else "No images detected in this document."
+                ),
+            }
+
         if action == "replace_image":
             # The intent layer deliberately returns no index. Resolve the target
             # here, against this document's real image list, so the client can

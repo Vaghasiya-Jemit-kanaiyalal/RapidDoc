@@ -149,6 +149,14 @@ def _extract_nth(command: str):
     if not match:
         match = _IMAGE_NTH_RE.search(command)
         if not match:
+            # Fallback for shorthand commands like "replace 1 by this", "replce #1", etc.
+            m2 = re.search(
+                r"\b(?:replace|replce|swap|change)\s+(?:the\s+)?(?:#|number\s+|no\.?\s*)?(\d+)\b",
+                command,
+                re.IGNORECASE,
+            )
+            if m2:
+                return _to_int(m2.group(1))
             return None
     return _to_int(match.group(1))
 

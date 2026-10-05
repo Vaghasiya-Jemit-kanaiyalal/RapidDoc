@@ -238,12 +238,6 @@ const LandingPage = ({ onNavigate }) => {
             >
               AI Engine
             </button>
-            <button 
-              onClick={() => onNavigate('landing', 'testimonials')} 
-              className="px-4 py-2 rounded-xl text-sm font-bold text-slate-700 hover:text-brand-600 hover:bg-white/80 transition-all duration-200 cursor-pointer"
-            >
-              Testimonials
-            </button>
           </div>
 
           <div className="flex items-center gap-3">
@@ -702,61 +696,96 @@ const LandingPage = ({ onNavigate }) => {
       {/* ═══════════════════════════════════════════════════ */}
       {/* FOOTER                                             */}
       {/* ═══════════════════════════════════════════════════ */}
-      <footer className="relative z-10 border-t border-borderline/50 bg-white">
-        <div className="max-w-6xl mx-auto px-6 lg:px-8 py-12">
-          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-10 mb-10">
+      <footer className="relative z-10 bg-white border-t border-slate-200/70 overflow-hidden">
+        {/* Soft background ambient glow accents */}
+        <div className="absolute top-0 left-0 w-80 h-80 bg-blue-500/5 rounded-full blur-3xl pointer-events-none -translate-x-1/2 -translate-y-1/2" />
+        <div className="absolute bottom-0 right-0 w-80 h-80 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none translate-x-1/4 translate-y-1/4" />
+
+        <div className="relative max-w-6xl mx-auto px-6 sm:px-8 lg:px-10 pt-16 pb-10">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-10 lg:gap-8 mb-12">
             {/* Brand */}
             <div className="sm:col-span-2 lg:col-span-1">
-              <img src={logo} alt="RapidDoc Logo" className="w-[56px] h-[56px] object-contain mb-3" />
-              <p className="text-sm text-secondary leading-relaxed max-w-xs">
+              <div className="flex items-center gap-2.5 mb-4">
+                <img src={loadingEffect} alt="RapidDoc Logo" className="w-8 h-8 sm:w-9 sm:h-9 object-contain drop-shadow-xs" />
+                <span className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 select-none">
+                  Rapid<span className="text-[#365CFF]">Doc</span>
+                </span>
+              </div>
+              <p className="text-sm text-slate-500 leading-relaxed max-w-xs">
                 AI-Powered Document Intelligence & Editing Platform. Upload, edit, and transform your documents with the power of AI.
               </p>
             </div>
+
             {/* Links: Product */}
             <div>
-              <h4 className="text-xs font-bold text-ink uppercase tracking-wider mb-4">Product</h4>
-              <ul className="space-y-2.5">
-                <li><a href="#features" className="text-sm text-secondary hover:text-brand-600 transition">Features</a></li>
-                <li><a href="#how" className="text-sm text-secondary hover:text-brand-600 transition">How It Works</a></li>
-                <li><a href="#ai" className="text-sm text-secondary hover:text-brand-600 transition">AI Engine</a></li>
-                <li><a href="#testimonials" className="text-sm text-secondary hover:text-brand-600 transition">Testimonials</a></li>
+              <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">PRODUCT</h4>
+              <div className="w-6 h-[2.5px] bg-[#365CFF] rounded-full mt-1.5 mb-4"></div>
+              <ul className="space-y-3">
+                <li><a href="#features" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Features</a></li>
+                <li><a href="#how" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">How It Works</a></li>
+                <li><a href="#ai" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">AI Engine</a></li>
+                <li><a href="#testimonials" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Testimonials</a></li>
               </ul>
             </div>
+
             {/* Links: Resources */}
             <div>
-              <h4 className="text-xs font-bold text-ink uppercase tracking-wider mb-4">Resources</h4>
-              <ul className="space-y-2.5">
-                <li><a href="#" className="text-sm text-secondary hover:text-brand-600 transition">Documentation</a></li>
-                <li><a href="#" className="text-sm text-secondary hover:text-brand-600 transition">API Reference</a></li>
-                <li><a href="#help" className="text-sm text-secondary hover:text-brand-600 transition">Help Center</a></li>
-                <li><a href="#" className="text-sm text-secondary hover:text-brand-600 transition">Changelog</a></li>
+              <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">RESOURCES</h4>
+              <div className="w-6 h-[2.5px] bg-[#365CFF] rounded-full mt-1.5 mb-4"></div>
+              <ul className="space-y-3">
+                <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Documentation</a></li>
+                <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">API Reference</a></li>
+                <li><a href="#help" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Help Center</a></li>
+                <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Changelog</a></li>
               </ul>
             </div>
+
             {/* Links: Legal */}
             <div>
-              <h4 className="text-xs font-bold text-ink uppercase tracking-wider mb-4">Legal</h4>
-              <ul className="space-y-2.5">
-                <li><a href="#privacy" className="text-sm text-secondary hover:text-brand-600 transition">Privacy Policy</a></li>
-                <li><a href="#terms" className="text-sm text-secondary hover:text-brand-600 transition">Terms of Service</a></li>
-                <li><a href="#" className="text-sm text-secondary hover:text-brand-600 transition">Cookie Policy</a></li>
+              <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">LEGAL</h4>
+              <div className="w-6 h-[2.5px] bg-[#365CFF] rounded-full mt-1.5 mb-4"></div>
+              <ul className="space-y-3">
+                <li><a href="#privacy" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Privacy Policy</a></li>
+                <li><a href="#terms" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Terms of Service</a></li>
+                <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Cookie Policy</a></li>
               </ul>
             </div>
           </div>
 
           {/* Bottom Bar */}
-          <div className="flex flex-col sm:flex-row justify-between items-center pt-8 border-t border-borderline/50 gap-4">
-            <span className="text-xs text-secondary">© 2026 RapidDoc. All rights reserved.</span>
-            <div className="flex items-center gap-4">
-              <a href="https://github.com/Vaghasiya-Jemit-kanaiyalal/RapidDoc" target="_blank" rel="noopener noreferrer" className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-secondary hover:text-ink hover:bg-slate-200 transition">
+          <div className="flex flex-col sm:flex-row justify-between items-center pt-8 border-t border-slate-200/80 gap-4">
+            <span className="text-xs sm:text-sm text-slate-500 font-medium">
+              © 2026 RapidDoc. All rights reserved.
+            </span>
+            <div className="flex items-center gap-3">
+              <a 
+                href="https://github.com/Vaghasiya-Jemit-kanaiyalal/RapidDoc" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="w-10 h-10 rounded-xl bg-slate-100/80 hover:bg-slate-200/80 border border-slate-200/70 flex items-center justify-center text-slate-500 hover:text-[#365CFF] hover:border-blue-200 shadow-2xs hover:scale-105 active:scale-95 transition-all duration-200"
+                aria-label="GitHub Repository"
+              >
                 <ExternalLink className="w-4 h-4" />
               </a>
-              <a href="#" className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-secondary hover:text-ink hover:bg-slate-200 transition">
+              <a 
+                href="#" 
+                className="w-10 h-10 rounded-xl bg-slate-100/80 hover:bg-slate-200/80 border border-slate-200/70 flex items-center justify-center text-slate-500 hover:text-[#365CFF] hover:border-blue-200 shadow-2xs hover:scale-105 active:scale-95 transition-all duration-200"
+                aria-label="Community Discussions"
+              >
                 <MessageCircle className="w-4 h-4" />
               </a>
-              <a href="#" className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-secondary hover:text-ink hover:bg-slate-200 transition">
+              <a 
+                href="#" 
+                className="w-10 h-10 rounded-xl bg-slate-100/80 hover:bg-slate-200/80 border border-slate-200/70 flex items-center justify-center text-slate-500 hover:text-[#365CFF] hover:border-blue-200 shadow-2xs hover:scale-105 active:scale-95 transition-all duration-200"
+                aria-label="Global Network"
+              >
                 <GlobeIcon className="w-4 h-4" />
               </a>
-              <a href="#" className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center text-secondary hover:text-ink hover:bg-slate-200 transition">
+              <a 
+                href="mailto:support@rapiddoc.ai" 
+                className="w-10 h-10 rounded-xl bg-slate-100/80 hover:bg-slate-200/80 border border-slate-200/70 flex items-center justify-center text-slate-500 hover:text-[#365CFF] hover:border-blue-200 shadow-2xs hover:scale-105 active:scale-95 transition-all duration-200"
+                aria-label="Email Support"
+              >
                 <Mail className="w-4 h-4" />
               </a>
             </div>

@@ -775,6 +775,211 @@ def test_one_footer_is_not_mistaken_for_four_different_footers(pdf_with_headers)
     assert info["different_odd_even"] is False
 
 
+def test_a_first_header_on_a_page_that_has_none_is_actually_written(pdf_no_furniture):
+    """Adding a header to a document that has none used to silently do nothing.
+
+    Every header/footer test replaced furniture that was already there. On a page
+    with none, the replacement box was anchored a hair above the band's own top
+    edge, so the text landed at y=4.8-18.6 where ``zone_spans`` classifies it as
+    body text - the save reported success and the header read back as empty.
+    """
+    apply_pdf(pdf_no_furniture, header_text="Subject: New\tID: 24DCS140")
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        page = doc[0]
+        assert structured_band_text(page, "header", 1, 4) == "Subject: New\tID: 24DCS140"
+        assert "Body content on page 1." in full_text(page)
+    finally:
+        doc.close()
+
+
+def test_a_first_footer_on_a_page_that_has_none_is_actually_written(pdf_no_furniture):
+    apply_pdf(pdf_no_furniture, footer_text="DEPSTAR (CSE)\t{PAGE}")
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        page = doc[0]
+        assert structured_band_text(page, "footer", 1, 4) == "DEPSTAR (CSE)\t{PAGE}"
+        assert "Body content on page 1." in full_text(page)
+    finally:
+        doc.close()
+
+
+def test_a_new_two_column_header_lands_on_the_margins(pdf_no_furniture):
+    """The exact acceptance configuration, on a page with no existing furniture.
+
+    Both columns on one row, left flush at the left margin, right flush at the
+    right margin, and a real gap between them - the layout the reference document
+    has and the editor's two fields imply.
+    """
+    apply_pdf(
+        pdf_no_furniture,
+        header_text="Subject: ITUE301 - Advanced Web Development Frameworks\tID: 24DCS140",
+    )
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        page = doc[0]
+        rows = hf.band_rows(hf.zone_spans(page, hf.band_rect(page, "header"), "header"))
+        assert len(rows) == 1, "the header wrapped instead of staying on one row"
+
+        boxes = [fitz.Rect(span["bbox"]) for span in sorted(rows[0], key=lambda s: s["bbox"][0])]
+        assert len(boxes) == 2
+        left, right = boxes
+        assert round(left.x0, 1) == 72.0
+        assert round(right.x1, 1) == 523.0
+        assert right.x0 > left.x1, "the two columns overlap"
+    finally:
+        doc.close()
+
+
+def test_long_text_is_written_rather_than_dropped(pdf_no_furniture):
+    """Text too long for one line used to be discarded entirely.
+
+    ``_fits`` refused to let furniture wrap unless the author had typed a
+    newline, so 300 characters fitted no size at all and the header was replaced
+    by nothing. Wrapping is now allowed as a fallback, bounded by the space above
+    the body so the two can never collide.
+    """
+    # Measured before the write: afterwards the header's own second line counts
+    # as body text and the ceiling collapses onto it.
+    before = fitz.open(pdf_no_furniture)
+    ceiling = hf.body_top(before) - hf.ZONE_GROWTH
+    before.close()
+
+    apply_pdf(pdf_no_furniture, header_text="L" * 300)
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        page = doc[0]
+        # Read the whole top of the page, not the band: a wrapped header extends
+        # below the nominal band, which is exactly what is under test here.
+        rendered = page.get_text("text", clip=fitz.Rect(0, 0, page.rect.width, ceiling))
+        assert rendered.count("L") >= 290, f"only {rendered.count('L')} of 300 characters rendered"
+        assert "Body content on page 1." in full_text(page)
+    finally:
+        doc.close()
+
+
+def test_a_wrapped_header_stays_above_the_body(pdf_no_furniture):
+    """Growth into the gap above the body must stop at the body."""
+    before = fitz.open(pdf_no_furniture)
+    ceiling = hf.body_top(before) - hf.ZONE_GROWTH
+    before.close()
+
+    apply_pdf(pdf_no_furniture, header_text="L" * 300)
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        page = doc[0]
+        below = fitz.Rect(0, ceiling, page.rect.width, page.rect.height / 2)
+        leaked = page.get_text("text", clip=below)
+        assert "L" not in leaked, (
+            f"the header wrapped past the ceiling at y={ceiling:.1f} into {leaked!r}"
+        )
+        assert "Body content on page 1." in full_text(page)
+    finally:
+        doc.close()
+
+
+def test_a_right_only_header_gets_the_whole_column(pdf_no_furniture):
+    """A right-only header was handed half the column and so could not be laid out.
+
+    ``_zone_plan`` reserved 35% of the column for a left section that was not
+    there, which halved the width available to the right one.
+    """
+    apply_pdf(pdf_no_furniture, header_text="\t" + "R" * 300)
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        page = doc[0]
+        spans = hf.zone_spans(page, hf.band_rect(page, "header"), "header")
+        assert spans, "a right-only header was dropped"
+        assert max(fitz.Rect(span["bbox"]).x1 for span in spans) >= 520.0
+    finally:
+        doc.close()
+
+
+def test_a_lone_page_number_is_read_back_as_a_field(pdf_no_furniture):
+    """A footer that is only the page number is still an outermost column.
+
+    Only multi-column bands were considered, so a bare ``{PAGE}`` came back as the
+    literal ``1`` - and re-saving froze that number onto every page.
+    """
+    apply_pdf(pdf_no_furniture, footer_text="{PAGE}")
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        for number in range(1, 5):
+            assert structured_band_text(doc[number - 1], "footer", number, 4) == "{PAGE}"
+    finally:
+        doc.close()
+
+
+def test_a_bare_number_in_the_middle_is_not_taken_for_a_page_number(pdf_no_furniture):
+    """The guard against over-eager detection must survive the change above."""
+    apply_pdf(pdf_no_furniture, footer_text="Left\t2024\tRight")
+
+    doc = fitz.open(pdf_no_furniture)
+    try:
+        text = structured_band_text(doc[0], "footer", 1, 4)
+        assert "2024" in text
+    finally:
+        doc.close()
+
+
+def test_a_distinct_first_page_is_reported_as_one(tmp_path):
+    """``different_first`` compared page 1 against itself.
+
+    ``header_odd`` was filled from the first odd page, which is page 1, so a
+    3-page document with a cover header reported no distinct first page - and
+    re-saving flattened the cover onto every page.
+    """
+    path = tmp_path / "first_page.pdf"
+    doc = fitz.open()
+    for number in range(1, 4):
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 300), f"Body {number}", fontsize=11)
+    doc.save(str(path))
+    doc.close()
+
+    apply_pdf_styling(
+        path, path,
+        header_text="Normal header", header_text_first="Cover header",
+        footer_text="Normal footer\t{PAGE}", footer_text_first="Cover footer",
+    )
+
+    doc = fitz.open(path)
+    try:
+        info = hf.read_pdf_headers_footers(doc)
+        assert info["header_first"] == "Cover header"
+        assert info["header_odd"] == "Normal header"
+        assert info["different_first"] is True
+    finally:
+        doc.close()
+
+
+def test_a_single_page_document_has_no_distinct_first_page(tmp_path):
+    """With only page 1 there is nothing for it to differ from."""
+    path = tmp_path / "single.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((72, 300), "Body", fontsize=11)
+    doc.save(str(path))
+    doc.close()
+
+    apply_pdf_styling(path, path, header_text="Only header")
+
+    doc = fitz.open(path)
+    try:
+        info = hf.read_pdf_headers_footers(doc)
+        assert info["header_odd"] == "Only header"
+        assert info["different_first"] is False
+    finally:
+        doc.close()
+
+
 def test_a_taller_header_still_renders_over_the_old_one(pdf_with_headers):
     """A one-line box cannot hold a three-line header; it used to vanish."""
     apply_pdf(

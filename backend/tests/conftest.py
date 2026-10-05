@@ -265,6 +265,33 @@ def pdf_mixed_headers(tmp_path):
 
 
 @pytest.fixture
+def pdf_no_furniture(tmp_path):
+    """A 4-page A4 PDF with body text and *no* header or footer at all.
+
+    The common case when someone opens a document that has never had furniture:
+    there is no old baseline to inherit and no old band to replace. Three separate
+    bugs lived here, and each is invisible against ``pdf_with_headers`` because
+    that fixture always has furniture to replace:
+
+    * the column was derived from where the body's longest line *ended*, so a
+      page holding one short paragraph gave a 119pt column and no header fitted;
+    * a brand new band was anchored a couple of points above the band's own top
+      edge, putting the text where ``zone_spans`` classified it as body text, so
+      it was written and then read back as absent;
+    * the band could not grow past a fixed 18pt allowance even when the body
+      started 250pt lower, so long text was rejected outright.
+    """
+    path = tmp_path / "no_furniture.pdf"
+    doc = fitz.open()
+    for number in range(1, 5):
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 300), f"Body content on page {number}.", fontsize=11)
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+@pytest.fixture
 def docx_with_headers(tmp_path):
     """A 2-page DOCX with a header and footer that span two paragraphs."""
     path = tmp_path / "headers.docx"

@@ -62,7 +62,7 @@ const previewText = (text, { page = 1, pages = 5 } = {}) =>
 const alignClass = (align) =>
   align === 'left' ? 'text-left' : align === 'right' ? 'text-right' : 'text-center';
 
-function AlignPicker({ value, onChange, label }) {
+function AlignPicker({ value, onChange, label, hint }) {
   const options = [
     { key: 'left', Icon: AlignLeft, title: 'Align Left' },
     { key: 'center', Icon: AlignCenter, title: 'Align Center' },
@@ -70,7 +70,10 @@ function AlignPicker({ value, onChange, label }) {
   ];
   return (
     <div>
-      <label className="block text-[11px] font-semibold text-slate-500 mb-1">{label}</label>
+      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+        {label}
+        {hint && <span className="ml-1 font-normal text-slate-400">{hint}</span>}
+      </label>
       <div className="flex bg-white border border-slate-200 rounded-xl p-1 justify-between">
         {options.map(({ key, Icon, title }) => (
           <button
@@ -162,6 +165,12 @@ function ColumnFields({ zoneName, field, label, hint, value, onChange, onFocus, 
     </div>
   );
 }
+
+// A line using both columns is always written flush to the two margins; the
+// per-zone alignment only applies to lines that use just one of them. Previewing
+// such a line as centred would contradict what gets written.
+const previewAlign = (columns, align) =>
+  (columns.left && columns.right) ? 'left' : align;
 
 // The PDF lays the two halves out on one line, flush to the edges of the text
 // column. Previewing them stacked, or run together as a single string, hid the
@@ -333,6 +342,12 @@ export const HeaderFooterEditor = ({
     const isHeader = zoneName === 'header';
     const showAlign = isHeader ? initialSection !== 'footer' : initialSection !== 'header';
 
+    // True when any line of this zone uses both columns, which is what decides
+    // whether the alignment picker below has any effect at all.
+    const splitsAnyLine = visibleFields(zone).some(
+      (f) => zone[f] && splitColumns(zone[f]).right.trim() !== ''
+    );
+
     return (
       <div className="space-y-2.5 pt-2">
         <div className="flex items-center justify-between">
@@ -449,12 +464,18 @@ export const HeaderFooterEditor = ({
           )}
         </div>
 
+        {/* Alignment only means something for a line with no right-hand section.
+            A line that fills both the Left and Right fields is always written
+            flush to the two margins - that is what "left content on the left,
+            right content on the right" requires - so the picker would otherwise
+            appear to set something the output ignores. */}
         {showAlign && (
           <div className="w-full sm:w-1/3 min-w-[140px]">
             <AlignPicker
               value={align}
               onChange={setAlign}
               label={`${isHeader ? 'Header' : 'Footer'} alignment`}
+              hint={splitsAnyLine ? '(single-side lines only)' : ''}
             />
           </div>
         )}
@@ -651,10 +672,13 @@ export const HeaderFooterEditor = ({
                       <div className="text-[9px] text-slate-400 mb-1 text-center font-semibold uppercase tracking-wider">
                         {label}
                       </div>
+                      {/* A line that fills both columns is written flush to the two
+                        margins whatever the alignment picker says, so the preview
+                        has to show it that way or it misrepresents the result. */}
                       <ColumnPreview
                         columns={headerColumns}
                         empty="[No Header]"
-                        align={headerAlign}
+                        align={previewAlign(headerColumns, headerAlign)}
                         style={columnStyle}
                         className="pb-2 border-b border-dashed border-slate-200"
                       />
@@ -664,7 +688,7 @@ export const HeaderFooterEditor = ({
                       <ColumnPreview
                         columns={footerColumns}
                         empty="[No Footer]"
-                        align={footerAlign}
+                        align={previewAlign(footerColumns, footerAlign)}
                         style={columnStyle}
                         className="pt-2 border-t border-dashed border-slate-200"
                       />

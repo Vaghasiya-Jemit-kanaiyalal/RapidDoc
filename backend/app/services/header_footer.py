@@ -346,14 +346,13 @@ def zone_spans(page, rect, which="header", force_text=None):
                     continue
 
                 box = fitz.Rect(span["bbox"])
-                baseline = span["origin"][1] if span.get("origin") else box.y1
-                if which == "header" and baseline < NEAR_EDGE:
-                    continue
-                if which == "footer" and baseline > page.rect.height - NEAR_EDGE:
-                    continue
-
                 centre_y = (box.y0 + box.y1) / 2
                 if rect.y0 - CLIP_TOLERANCE <= centre_y <= rect.y1 + CLIP_TOLERANCE:
+                    baseline = span["origin"][1] if span.get("origin") else box.y1
+                    if which == "header" and baseline < NEAR_EDGE:
+                        continue
+                    if which == "footer" and baseline > page.rect.height - NEAR_EDGE:
+                        continue
                     spans.append(span)
     return spans
 
@@ -472,10 +471,13 @@ def band_text(page, which="header", page_number=None, page_count=None,
     lines = []
     for columns in rows:
         cells = columns[:]
-        if len(cells) > 1:
-            # Only the outermost columns can be a page number.
-            cells[0] = _page_number_field(cells[0], page_number, page_count)
-            cells[-1] = _page_number_field(cells[-1], page_number, page_count)
+        # Only the outermost columns can be a page number - a bare number in the
+        # middle of a footer is far more likely to be a roll number, a year or a
+        # version. A footer whose only column is the page number is an outermost
+        # column too, and was left as a literal "1": the editor then showed a
+        # fixed number where the user had typed {PAGE}, and re-saving froze it.
+        cells[0] = _page_number_field(cells[0], page_number, page_count)
+        cells[-1] = _page_number_field(cells[-1], page_number, page_count)
         if len(cells) == 2:
             lines.append(join_parts(cells[0], cells[1]))
         else:
@@ -631,6 +633,13 @@ def body_column(doc, sample=4):
 
     Only used for pages that carry no furniture at all, so a first-time header
     lands on the text column instead of an arbitrary inset.
+
+    Where body text *stops* is not where the text column *ends*. A page holding
+    one short paragraph ends its text at x=191 while its margin is at 523, and
+    using that as the column's right edge left the left section 45pt wide - too
+    narrow for any header, so the first header added to a document without one
+    was rejected and nothing was written. The column is therefore widened to
+    cover both the observed text and the default text width.
     """
     for index, page in enumerate(doc):
         if index >= sample:
@@ -648,8 +657,43 @@ def body_column(doc, sample=4):
                     box = fitz.Rect(span["bbox"])
                     left = box.x0 if left is None else min(left, box.x0)
                     right = box.x1 if right is None else max(right, box.x1)
-        if left is not None and right - left >= MIN_COLUMN:
+        if left is None:
+            continue
+
+        # Where body text stops is not where the text column ends: a page holding
+        # one short paragraph stops at x=191 while its margin is at 523. The
+        # column is therefore the union of the observed text and the default
+        # text width, so it can only ever be at least as wide as a normal margin.
+        # Using only the observed extent is what left the left section 45pt wide
+        # and silently refused to write a first header at all.
+        left = min(left, FALLBACK_INSET)
+        right = max(right, page.rect.width - FALLBACK_INSET)
+        if right - left >= MIN_COLUMN:
             return left, right
+    return None
+
+
+def body_top(doc, sample=4):
+    """Where body text first starts, or ``None`` when there is none.
+
+    A new band may grow downwards into the space above the body, but only into
+    space that is actually free. A fixed growth allowance does not know that the
+    body of this document starts at y=76, and gives up on text that would have
+    fitted in the gap.
+    """
+    for index, page in enumerate(doc):
+        if index >= sample:
+            break
+        floor = fitz.Rect(EDGE_INSET, band_rect(page, "header").y1 + CLIP_TOLERANCE,
+                          page.rect.width - EDGE_INSET,
+                          band_rect(page, "footer").y0 - CLIP_TOLERANCE)
+        tops = [fitz.Rect(span["bbox"]).y0
+                for block in page.get_text("dict", clip=floor).get("blocks", [])
+                for line in block.get("lines", [])
+                for span in line.get("spans", [])
+                if _span_text(span)]
+        if tops:
+            return min(tops)
     return None
 
 
@@ -698,30 +742,45 @@ def _fits(page_rect, body, inner, fontsize, fontname, align):
     therefore checked explicitly: furniture wraps only when the author asked it
     to, with a newline.
 
+    The second pass is what stops genuinely long text from vanishing. Refusing to
+    wrap meant a 300-character header could not be laid out at any legal size, so
+    it reported "does not fit" and was dropped on the floor - the editor showed
+    the text, the save succeeded, and the PDF had no header at all. When nothing
+    fits on the requested number of lines, wrapping is allowed as long as the
+    lines stay inside ``inner``: ``insert_textbox`` returns a negative height when
+    the text runs past the bottom of its box, so vertical containment is still
+    checked, and nothing can escape the band.
+
     Asking the question on a scratch page is what lets the caller leave the
     existing furniture alone instead of erasing it and only then discovering
     there was no room for the replacement.
     """
     allowed = max(1, len(body.split("\n")))
     size = float(fontsize)
-    while size >= 6.0:
-        try:
-            probe = fitz.open()
-            page = probe.new_page(width=page_rect.width, height=page_rect.height)
-            written = page.insert_textbox(
-                inner, body, fontsize=size, fontname=fontname, align=align,
-            )
-            lines = _written_lines(page, inner) if written >= 0 else 0
-            probe.close()
-            if written >= 0 and 0 < lines <= allowed:
-                return size
-        except Exception:
-            return size
-        size -= 1.0
+
+    for max_lines in (allowed, None):
+        probe_size = size
+        while probe_size >= 6.0:
+            try:
+                probe = fitz.open()
+                page = probe.new_page(width=page_rect.width, height=page_rect.height)
+                written = page.insert_textbox(
+                    inner, body, fontsize=probe_size, fontname=fontname, align=align,
+                )
+                lines = _written_lines(page, inner) if written >= 0 else 0
+                probe.close()
+            except Exception:
+                return probe_size
+
+            if written >= 0 and lines > 0 and (max_lines is None or lines <= max_lines):
+                return probe_size
+            probe_size -= 1.0
+
     return None
 
 
-def _zone_box(page, rect, erased_box, which="header", fallback_column=None):
+def _zone_box(page, rect, erased_box, which="header", fallback_column=None,
+              fontsize=DEFAULT_FONT_SIZE, body_ceiling=None):
     """The box a replacement header/footer is laid out in.
 
     ``insert_textbox`` writes downwards from the top of its rectangle, so the top
@@ -737,13 +796,64 @@ def _zone_box(page, rect, erased_box, which="header", fallback_column=None):
     left, right = text_column(page, which, erased_box, fallback_column)
     height = page.rect.height
 
-    if which == "header":
-        top = (erased_box.y0 if erased_box is not None else rect.y0) - 2
-        floor = max(rect.y1, erased_box.y1 if erased_box is not None else rect.y1)
-        return fitz.Rect(left, top, right, min(floor + ZONE_GROWTH, height - EDGE_INSET))
+    # A band with nothing to replace can grow into the empty space above the body.
+    # The fixed ZONE_GROWTH allowance is a guess at that space, and a document
+    # whose body starts at y=288 has far more of it: a two-sided header of 300
+    # characters per side needs 41pt at the smallest legal size against the 34.8pt
+    # the fixed allowance allows, so both sections were rejected and the header
+    # was written as nothing at all. Growth is therefore bounded by where the body
+    # actually begins, which is the only thing that makes it safe to go further.
+    ceiling = body_ceiling
+    growth = ZONE_GROWTH
+    if ceiling is not None:
+        growth = max(growth, ceiling - rect.y1)
 
-    top = (erased_box.y0 if erased_box is not None else rect.y0) - 2
-    bottom = (erased_box.y1 if erased_box is not None else rect.y1) + ZONE_GROWTH
+    if erased_box is None:
+        # A brand new band has no baseline to inherit, so placement is derived
+        # from the font instead: the first baseline lands about 1.075em below the
+        # box's top edge.
+        #
+        # A new *header* is pushed to the far edge of its band. Anchored at the
+        # near edge, 12pt text put its baseline at y=20.8 - exactly where the
+        # first line of body text sits on a marginless page - so ``zone_spans``
+        # rightly refused to read it back as furniture and the header looked as
+        # though it had never been written. Sitting low, just above the body, is
+        # also where a template with a real top margin puts its header.
+        #
+        # A new *footer* is anchored at the near edge of its band, which is the
+        # existing behaviour and already reads back correctly; the far edge is
+        # the page itself, so pushing text down there would bury it in the
+        # NEAR_EDGE margin that keeps body text from being mistaken for a footer.
+        size = max(1.0, float(fontsize))
+        ascent = 1.075 * size
+
+        if which == "header":
+            baseline = rect.y1 - BAND_INSET
+            floor = rect.y1 + growth
+            if ceiling is not None:
+                # The ceiling is where the body starts, not a hint about how far
+                # to grow: adding it to the band edge would put the box's bottom
+                # below the ceiling and let a long header be drawn over the first
+                # line of body text.
+                floor = min(floor, ceiling)
+            return fitz.Rect(left, baseline - ascent, right,
+                             min(floor, height - EDGE_INSET))
+
+        top = rect.y0
+        return fitz.Rect(left, top, right,
+                         min(top + max(ascent * 1.6, rect.height), height - EDGE_INSET))
+
+    if which == "header":
+        top = erased_box.y0 - 2
+        floor = max(rect.y1, erased_box.y1)
+        if ceiling is not None:
+            floor = min(floor + ZONE_GROWTH, ceiling)
+        else:
+            floor += ZONE_GROWTH
+        return fitz.Rect(left, top, right, min(floor, height - EDGE_INSET))
+
+    top = erased_box.y0 - 2
+    bottom = erased_box.y1 + ZONE_GROWTH
     return fitz.Rect(left, top, right, min(bottom, height - EDGE_INSET))
 
 
@@ -751,6 +861,11 @@ def _zone_box(page, rect, erased_box, which="header", fallback_column=None):
 # second or third line, small enough to stay well clear of the body: the AWDF and
 # OSD reports both start their body around y=76.
 ZONE_GROWTH = 18.0
+
+# How far inside a band's far edge a brand new header's baseline is placed.
+# Without it the first line lands on the same y as body text on a marginless
+# page and cannot be recognised as furniture.
+BAND_INSET = 6.0
 
 
 # Base-14 PDF fonts carry WinAnsi, and PyMuPDF maps anything outside it to '?'
@@ -826,10 +941,17 @@ def _zone_plan(sections, inner, alignment, fontname="helv", fontsize=10.0):
     both on one line, which is what a tab stop does in Word.
 
     Falls back to the midpoint when the right section is too wide for that to
-    leave the left a usable column.
+    leave the left a usable column - but only when there is a left section to
+    protect. Measuring an empty left section as if it needed 35% of the column
+    handed a right-only footer half the text width, so a 300-character right
+    section could not be laid out at any legal size and was dropped.
     """
     left = sections.get("left", "")
     right = sections.get("right", "")
+
+    if right and not left.strip():
+        return (("right", fitz.Rect(inner.x0, inner.y0, inner.x1, inner.y1),
+                 fitz.TEXT_ALIGN_RIGHT),)
 
     if right:
         try:
@@ -858,7 +980,8 @@ def _zone_plan(sections, inner, alignment, fontname="helv", fontsize=10.0):
 
 def write_pdf_zone(page, rect, text, page_number, page_count, fontname,
                    fontsize, alignment, color=DEFAULT_COLOR, erased_box=None,
-                   title="", filename="", which="header", fallback_column=None):
+                   title="", filename="", which="header", fallback_column=None,
+                   body_ceiling=None):
     """Write one header/footer band, with this page's field values resolved.
 
     When the old text was found it is replaced in its own vertical position, so
@@ -874,7 +997,8 @@ def write_pdf_zone(page, rect, text, page_number, page_count, fontname,
 
     sections = dict(zip(("left", "right"),
                         _zone_sections(text, page_number, page_count, title, filename)))
-    inner = _zone_box(page, rect, erased_box, which, fallback_column)
+    inner = _zone_box(page, rect, erased_box, which, fallback_column, fontsize,
+                      body_ceiling)
     plan = _zone_plan(sections, inner, alignment, fontname, fontsize)
     if not any(sections.get(name, "").strip() for name, _, _ in plan):
         return False
@@ -891,7 +1015,7 @@ def write_pdf_zone(page, rect, text, page_number, page_count, fontname,
 
 def zone_fits(page, rect, text, erased_box, which, alignment, fontname, fontsize,
               title="", filename="", page_number=1, page_count=1,
-              fallback_column=None):
+              fallback_column=None, body_ceiling=None):
     """Whether every section of a band can be laid out, trying smaller sizes.
 
     ``insert_textbox`` writes nothing and returns a negative height when text
@@ -900,7 +1024,8 @@ def zone_fits(page, rect, text, erased_box, which, alignment, fontname, fontsize
     """
     sections = dict(zip(("left", "right"),
                         _zone_sections(text, page_number, page_count, title, filename)))
-    inner = _zone_box(page, rect, erased_box, which, fallback_column)
+    inner = _zone_box(page, rect, erased_box, which, fallback_column, fontsize,
+                      body_ceiling)
     for name, box, align in _zone_plan(sections, inner, alignment, fontname, fontsize):
         body = sections.get(name, "")
         if not body.strip():
@@ -942,6 +1067,10 @@ def apply_pdf_headers_footers(doc, spec: dict, fontname=None, fontsize=None,
     targets = targets or {}
     page_count = doc.page_count
     fallback_column = body_column(doc)
+    top = body_top(doc)
+    # The gap a new header may grow into, stopping short of the body. The footer
+    # grows the other way, towards the paper edge, which has no such limit.
+    body_ceiling = None if top is None else max(top - ZONE_GROWTH, 0.0)
     touched = {"header": 0, "footer": 0}
     failed = []
 
@@ -980,7 +1109,8 @@ def apply_pdf_headers_footers(doc, spec: dict, fontname=None, fontsize=None,
             if not zone_fits(page, rect, wanted, erased_box, which, align_name,
                              use_font, use_size, title=title, filename=filename,
                              page_number=page_number, page_count=page_count,
-                             fallback_column=fallback_column):
+                             fallback_column=fallback_column,
+                             body_ceiling=body_ceiling):
                 failed.append((which, page_number))
                 continue
 
@@ -990,6 +1120,7 @@ def apply_pdf_headers_footers(doc, spec: dict, fontname=None, fontsize=None,
                 page, rect, wanted, page_number, page_count, use_font, use_size,
                 align_name, color=use_color, erased_box=erased_box, title=title,
                 filename=filename, which=which, fallback_column=fallback_column,
+                body_ceiling=body_ceiling,
             )
             if ok:
                 touched[which] += 1
@@ -1434,6 +1565,8 @@ def read_pdf_headers_footers(doc) -> dict:
         seen = {"header": set(), "footer": set()}
         styles = {"header": None, "footer": None}
         longest_seen = {"header": 0, "footer": 0}
+        odd_headers = []
+        odd_footers = []
         page_count = doc.page_count
 
         for index, page in enumerate(doc):
@@ -1456,11 +1589,31 @@ def read_pdf_headers_footers(doc) -> dict:
                     longest_seen[which] = longest
                     styles[which] = _style_report(spans)
 
-                slot = f"{which}_{'odd' if page_number % 2 else 'even'}"
-                if result[slot] is None:
-                    result[slot] = text
-                if page_number == 1 and result[f"{which}_first"] is None:
-                    result[f"{which}_first"] = text
+                # The odd side is the document's *default* header, which is what pages
+                # after the first one use. Filling it from page 1 would report a
+                # cover page's text as the default, so an odd/even document with
+                # a distinct cover shows the wrong default in the editor and
+                # saving it flattens the cover onto every odd page.
+                if page_number % 2:
+                    if page_number == 1:
+                        if result[f"{which}_first"] is None:
+                            result[f"{which}_first"] = text
+                    elif result[f"{which}_odd"] is None:
+                        result[f"{which}_odd"] = text
+                else:
+                    slot = f"{which}_even"
+                    if result[slot] is None:
+                        result[slot] = text
+                # Page 1 is odd but carries the *first-page* variant, so it says
+                # nothing about which text the normal odd side uses. Collecting
+                # it here would make the comparison below compare page 1 with
+                # itself.
+                if page_number % 2 and page_number > 1:
+                    (odd_headers if which == "header" else odd_footers).append(text)
+                # A single-page document has no later odd page to fall back on,
+                # so page 1 is the odd side as well.
+                if page_number == 1 and page_count == 1 and result[f"{which}_odd"] is None:
+                    result[f"{which}_odd"] = text
 
         result["header_style"] = styles["header"]
         result["footer_style"] = styles["footer"]
@@ -1471,10 +1624,21 @@ def read_pdf_headers_footers(doc) -> dict:
             or bool(result["footer_even"] and result["footer_odd"]
                     and result["footer_odd"] != result["footer_even"])
         )
-        result["different_first"] = bool(
-            result["header_first"] and result["header_first"] != result["header_odd"]
-        ) or bool(
-            result["footer_first"] and result["footer_first"] != result["footer_odd"]
+        # "Different first page" is a claim about page 1 against the pages that
+        # follow, so the normal side has to be read from a page other than page
+        # 1. Page 1 is odd, so on a document whose only odd page is page 1,
+        # header_odd *is* the first-page text and the two compared equal -
+        # a 3-page document with a cover header read back as a plain
+        # all-pages header, and re-saving flattened the cover.
+        def first_page_differs(first, odd_pages):
+            if not first:
+                return False
+            later = [text for text in odd_pages if text]
+            return bool(later) and all(text != first for text in later)
+
+        result["different_first"] = (
+            first_page_differs(result["header_first"], odd_headers)
+            or first_page_differs(result["footer_first"], odd_footers)
         )
         return result
     except Exception as e:

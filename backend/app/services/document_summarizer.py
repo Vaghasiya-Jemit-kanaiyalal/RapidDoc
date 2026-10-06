@@ -259,68 +259,48 @@ def synthesize_markdown_summary(
     original_char_count: int,
     start_time: float,
 ) -> Dict[str, Any]:
-    # 1. Conclusion & Outcomes (Directly derived from the final terminal sections/chunks)
-    terminal_chunks = [c for c in chunks if c.is_terminal] or ([chunks[-1]] if chunks else [])
-    conclusion_text = terminal_chunks[-1].text if terminal_chunks else full_text[-1200:]
-    conclusion_sentences = score_and_extract_key_sentences(conclusion_text, max_sentences=2)
-    conclusion_paragraph = " ".join(conclusion_sentences) if conclusion_sentences else "Document analysis and outcomes successfully processed."
-
-    # 2. Overview Synthesis (Context, main purpose from opening chunks)
+    """Reduce and synthesize intermediate chunk summaries into a cohesive, structured Markdown document."""
+    # 1. Overview Synthesis (Context, main purpose from opening chunks)
     opening_text = chunks[0].text if chunks else full_text[:1200]
     overview_sentences = score_and_extract_key_sentences(opening_text, max_sentences=2)
-    overview_sentences = [
-        s for s in overview_sentences
-        if s.lower() not in conclusion_paragraph.lower()
-    ]
     overview_paragraph = " ".join(overview_sentences) if overview_sentences else f"Comprehensive analysis of {doc_title}."
 
-    # 3. Key Points Synthesis (Distributed across beginning, middle, and body sections)
+    # 2. Key Points Synthesis (Distributed across beginning, middle, and later parts of the document)
     key_points: List[str] = []
     seen_points = set()
 
     for chunk in chunks:
-        # If this chunk is the terminal conclusion section, let the dedicated conclusion section present it
-        if chunk.is_terminal and len(chunks) > 1:
-            continue
+        # Extract 1 representative statement from every chunk
         pts = score_and_extract_key_sentences(chunk.text, max_sentences=1)
         for p in pts:
             p_clean = p.rstrip(".")
+            # Avoid duplicate or near-identical bullet points
             norm = re.sub(r"[^a-z0-9]", "", p_clean.lower()[:40])
-            if norm not in seen_points and p_clean.lower() not in conclusion_paragraph.lower():
+            if norm not in seen_points:
                 seen_points.add(norm)
                 key_points.append(p_clean)
 
-    # Fallback if key_points is empty
-    if not key_points and chunks:
-        for chunk in chunks:
-            pts = score_and_extract_key_sentences(chunk.text, max_sentences=1)
-            for p in pts:
-                p_clean = p.rstrip(".")
-                if p_clean.lower() not in conclusion_paragraph.lower():
-                    key_points.append(p_clean)
-                    break
-
     # Cap key points at 8 distinct points spanning the document
     if len(key_points) > 8:
+        # Sample evenly across document chunks
         indices = [int(i * (len(key_points) - 1) / 7) for i in range(8)]
         key_points = [key_points[i] for i in sorted(set(indices))]
 
-    # 4. Key Findings, Metrics, & Dates across the document
+    # 3. Key Findings, Metrics, & Dates across the document
     metrics_and_dates = extract_key_metrics_and_dates(full_text)
-    filtered_metrics = []
-    for finding in metrics_and_dates:
-        if finding.lower() not in conclusion_paragraph.lower():
-            filtered_metrics.append(finding)
 
-    # 5. Section-by-Section Breakdown (Ensures every body section is visible, excluding conclusion)
+    # 4. Section-by-Section Breakdown (Ensures every part is visible)
     section_breakdowns: List[Tuple[str, str]] = []
     for chunk in chunks:
-        is_conclusion_sec = bool(re.search(r"\b(conclusion|summary|outcomes?)\b", chunk.title, re.IGNORECASE))
-        if is_conclusion_sec and len(chunks) > 1:
-            continue
         summary_body = chunk.intermediate_summary or summarize_single_chunk(chunk)
-        if summary_body and summary_body.lower() not in conclusion_paragraph.lower():
+        if summary_body:
             section_breakdowns.append((chunk.title, summary_body))
+
+    # 5. Conclusion & Outcomes (Directly derived from the final sections/chunks)
+    terminal_chunks = [c for c in chunks if c.is_terminal] or [chunks[-1]] if chunks else []
+    conclusion_text = terminal_chunks[-1].text if terminal_chunks else full_text[-1200:]
+    conclusion_sentences = score_and_extract_key_sentences(conclusion_text, max_sentences=2)
+    conclusion_paragraph = " ".join(conclusion_sentences) if conclusion_sentences else "Document analysis and outcomes successfully processed."
 
     # Build the Markdown Document
     md_lines: List[str] = [
@@ -335,13 +315,13 @@ def synthesize_markdown_summary(
         md_lines.append(f"- {pt}")
     md_lines.append("")
 
-    if filtered_metrics:
+    if metrics_and_dates:
         md_lines.append("## Important Findings & Metrics")
-        for finding in filtered_metrics[:6]:
+        for finding in metrics_and_dates[:6]:
             md_lines.append(f"- **Key Detail**: {finding}")
         md_lines.append("")
 
-    if section_breakdowns:
+    if len(section_breakdowns) > 1:
         md_lines.append("## Section Highlights")
         for title, s_sum in section_breakdowns:
             md_lines.append(f"- **{title}**: {s_sum}")
@@ -420,3 +400,4 @@ def generate_complete_document_summary(
         result["chunks_processed"], len(result["summary"] or ""), result["elapsed_seconds"]
     )
     return result
+

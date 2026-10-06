@@ -901,6 +901,8 @@ async def update_document_pipeline_endpoint(
             stage_percent_map = {1: 25, 2: 50, 3: 75, 4: 100}
             if request.completion_percent is None and request.pipeline_stage in stage_percent_map:
                 update_data["completion_percent"] = stage_percent_map[request.pipeline_stage]
+            if request.pipeline_stage == 4 and request.pipeline_status is None:
+                update_data["pipeline_status"] = "Finalized"
         if request.pipeline_status is not None:
             update_data["pipeline_status"] = request.pipeline_status
         if request.completion_percent is not None:

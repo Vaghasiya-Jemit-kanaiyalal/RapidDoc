@@ -1552,7 +1552,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         body: JSON.stringify({
           pipeline_stage: pipelineStage,
           completion_percent: completionPercent,
-          pipeline_status: 'In Progress',
+          pipeline_status: pipelineStage === 4 ? 'Finalized' : (pipelineStatus || 'In Progress'),
           draft_edits: pendingEdits
         })
       });

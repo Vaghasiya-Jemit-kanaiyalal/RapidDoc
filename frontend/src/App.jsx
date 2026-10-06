@@ -837,8 +837,9 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
     }
   };
 
-  const activePipelines = documents.filter(d => (d.pipeline_stage || 1) < 4 || d.pipeline_status === 'In Progress');
-  const finalizedCount = documents.filter(d => (d.pipeline_stage || 1) === 4 || d.pipeline_status === 'Finalized').length;
+  const isFinalizedDoc = (d) => (d.pipeline_stage || 1) === 4 || d.pipeline_status === 'Finalized';
+  const finalizedCount = documents.filter(isFinalizedDoc).length;
+  const activePipelines = documents.filter(d => !isFinalizedDoc(d));
   const latestActive = activePipelines[0];
 
   // Stat card data with brand-consistent colors

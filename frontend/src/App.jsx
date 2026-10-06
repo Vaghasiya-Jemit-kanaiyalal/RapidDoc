@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, useInView, AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { safeFetchJson, API_URL, getAuthHeaders, AUTH_EXPIRED_EVENT } from './utils/api';
-import { Login } from './components/Auth/Login';
-import { Register } from './components/Auth/Register';
+import { AuthSwitch, Login, Register } from './components/Auth';
+import { CelebrationSparkles } from './components/ui/CelebrationSparkles';
 import { UploadZone } from './components/Dashboard/UploadZone';
 import { DocumentList } from './components/Dashboard/DocumentList';
 import { DocumentListSkeleton } from './components/Editor/EditorSkeletons';
@@ -1223,6 +1223,16 @@ const MainApp = () => {
   const [currentView, setCurrentView] = useState(() => parseRouteFromUrl().view);
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [sessionNotice, setSessionNotice] = useState('');
+  const [celebration, setCelebration] = useState(null);
+
+  const handleAuthSuccess = (isRegister = false) => {
+    setSessionNotice('');
+    setCelebration({
+      title: isRegister ? 'Account Created Successfully!' : (user?.name ? `Welcome back, ${user.name}!` : 'Welcome to RapidDoc!'),
+      subtitle: isRegister ? 'Your AI document generation workspace is ready. Enjoy!' : 'Your documents, models, and shared exports are loaded.',
+    });
+    handleNavigate('dashboard');
+  };
 
   // When the backend rejects a request with 401 (expired/invalid token),
   // clear the session and send the user back to the login view with a notice.
@@ -1333,28 +1343,38 @@ const MainApp = () => {
     );
   }
 
-  switch (currentView) {
-    case 'login':
-      return <Login notice={sessionNotice} onNoticeDismiss={() => setSessionNotice('')} onToggleMode={handleNavigate} onSuccess={() => { setSessionNotice(''); handleNavigate('dashboard'); }} />;
-    case 'register':
-      return <Register onToggleMode={handleNavigate} onSuccess={() => handleNavigate('dashboard')} />;
-    case 'dashboard':
-      if (!token) {
-        return <Login notice={sessionNotice} onNoticeDismiss={() => setSessionNotice('')} onToggleMode={handleNavigate} onSuccess={() => { setSessionNotice(''); handleNavigate('dashboard'); }} />;
-      }
-      return (
-        <Dashboard 
-          token={token} 
-          user={user} 
-          onLogout={logout} 
-          onHome={() => handleNavigate('landing')}
-          onSelectDocument={handleSelectDocument} 
-        />
-      );
-    case 'workspace':
-      if (!selectedDoc) {
+  const renderCurrentView = () => {
+    switch (currentView) {
+      case 'login':
+      case 'register':
+        return (
+          <AuthSwitch 
+            initialMode={currentView} 
+            notice={sessionNotice} 
+            onNoticeDismiss={() => setSessionNotice('')} 
+            onToggleMode={(mode) => {
+              if (mode === 'landing' || mode === 'dashboard') {
+                handleNavigate(mode);
+              }
+            }} 
+            onSuccess={handleAuthSuccess} 
+          />
+        );
+      case 'dashboard':
         if (!token) {
-          return <LandingPage onNavigate={handleNavigate} />;
+          return (
+            <AuthSwitch 
+              initialMode="login" 
+              notice={sessionNotice} 
+              onNoticeDismiss={() => setSessionNotice('')} 
+              onToggleMode={(mode) => {
+                if (mode === 'landing' || mode === 'dashboard') {
+                  handleNavigate(mode);
+                }
+              }} 
+              onSuccess={handleAuthSuccess} 
+            />
+          );
         }
         return (
           <Dashboard 
@@ -1365,19 +1385,47 @@ const MainApp = () => {
             onSelectDocument={handleSelectDocument} 
           />
         );
-      }
-      return (
-        <DocumentWorkspace 
-          document={selectedDoc} 
-          token={token} 
-          onBack={handleBackToDashboard}
-          onHome={() => handleNavigate('landing')}
+      case 'workspace':
+        if (!selectedDoc) {
+          if (!token) {
+            return <LandingPage onNavigate={handleNavigate} />;
+          }
+          return (
+            <Dashboard 
+              token={token} 
+              user={user} 
+              onLogout={logout} 
+              onHome={() => handleNavigate('landing')}
+              onSelectDocument={handleSelectDocument} 
+            />
+          );
+        }
+        return (
+          <DocumentWorkspace 
+            document={selectedDoc} 
+            token={token} 
+            onBack={handleBackToDashboard}
+            onHome={() => handleNavigate('landing')}
+          />
+        );
+      case 'landing':
+      default:
+        return <LandingPage onNavigate={handleNavigate} />;
+    }
+  };
+
+  return (
+    <>
+      {celebration && (
+        <CelebrationSparkles
+          title={celebration.title}
+          subtitle={celebration.subtitle}
+          onComplete={() => setCelebration(null)}
         />
-      );
-    case 'landing':
-    default:
-      return <LandingPage onNavigate={handleNavigate} />;
-  }
+      )}
+      {renderCurrentView()}
+    </>
+  );
 };
 
 export default function App() {

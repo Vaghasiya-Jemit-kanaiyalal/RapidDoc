@@ -73,6 +73,8 @@ class FindReplaceRequest(BaseModel):
 
 class AICommandRequest(BaseModel):
     command: str
+    # Explicit passage to act on; skips document parsing when provided.
+    text: Optional[str] = None
     # True when the client sent this command alongside an attached image. Tells
     # the intent cascade that a picture is available to swap in, so "replace the
     # logo" resolves to replace_image instead of a text replace of "the logo".

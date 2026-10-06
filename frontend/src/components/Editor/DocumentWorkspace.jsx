@@ -2753,6 +2753,18 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                       {fmt.label}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAiSummary(null);
+                      setSummaryExportError('');
+                    }}
+                    title="Close summary"
+                    aria-label="Close summary"
+                    className="rounded-lg border border-indigo-200/80 bg-white/80 p-1 text-slate-400 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-600 transition ml-0.5"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
               {summaryExportError && (

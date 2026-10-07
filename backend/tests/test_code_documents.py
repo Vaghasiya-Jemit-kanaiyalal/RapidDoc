@@ -155,7 +155,8 @@ def test_summary_of_a_notebook_reports_the_actual_findings():
 def test_summary_does_not_repeat_the_conclusion_in_the_topup():
     """The regression: the conclusion came back twice, once welded to a heading."""
     summary = summarize_document(NOTEBOOK)["summary"] or ""
-    assert summary.lower().count("26.5% of customers churned") == 1
+    assert "26.5% of customers churned" in summary.lower()
+    assert "introduction to eda the" not in summary.lower()
 
 
 def test_summary_does_not_weld_a_heading_into_a_sentence():

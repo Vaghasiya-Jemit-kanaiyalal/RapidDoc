@@ -5,13 +5,19 @@ import laodingEffect from '../../assets/laoding_effect.png';
 import { HeaderFooterEditor } from './HeaderFooterEditor';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ImageResizeDialog } from './ImageResizeDialog';
+import { SelectionBubble } from './SelectionBubble';
+import { TableToolbar } from './TableToolbar';
+import { PageSetupDialog } from './PageSetupDialog';
+import { DiffReviewModal } from './DiffReviewModal';
+import { extractRunsFromElement } from '../../utils/domRuns';
 import { useEditHistory, useUndoRedoShortcuts } from '../../hooks/useEditHistory';
 import { DocumentSkeleton, PreviewSkeleton } from './EditorSkeletons';
 import { 
   FileText, Download, ChevronDown,
   RefreshCw, AlertTriangle, Save, Loader2, CheckCircle2,
   Send, ZoomIn, X, Wand2, History, ArrowRight, FileSignature, ArrowLeft,
-  Sparkles, ListOrdered, Copy, Undo2, Redo2, ImageIcon, Paperclip, Ruler
+  Sparkles, ListOrdered, Copy, Undo2, Redo2, ImageIcon, Paperclip, Ruler,
+  Layout, Table as TableIcon, Plus
 } from 'lucide-react';
 
 const AI_STATUSES = [
@@ -518,6 +524,179 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   const [aiSummary, setAiSummary] = useState(null); // {summary, source, engine, length}
   const [commandHistory, setCommandHistory] = useState([]); // conversation memory for universal command bar
   const [activeSelection, setActiveSelection] = useState(null); // active selected text context
+  const [selectionBubble, setSelectionBubble] = useState(null);
+  const [activeTableState, setActiveTableState] = useState(null); // { tableIndex, row, col }
+  const [pageSetupOpen, setPageSetupOpen] = useState(false);
+  const [diffReviewData, setDiffReviewData] = useState(null);
+  const [tableMutating, setTableMutating] = useState(false);
+
+  const handleTableMutation = async (operation, params = {}) => {
+    setTableMutating(true);
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/tables/mutate`, {
+        method: 'POST',
+        headers: {
+          ...getAuthHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          operation,
+          ...params,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Table operation failed');
+      }
+      setAiResult(data.message || 'Table updated successfully.');
+      await fetchContent();
+      await refreshDoc();
+      await refreshFullPreview();
+    } catch (err) {
+      alert(`Error updating table: ${err.message}`);
+    } finally {
+      setTableMutating(false);
+    }
+  };
+
+  const handleInsertTable = () => {
+    handleTableMutation('insert_table', { rows: 3, cols: 3 });
+  };
+
+  const handlePageSetupApply = async (setupParams) => {
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/page-setup`, {
+        method: 'POST',
+        headers: {
+          ...getAuthHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(setupParams),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Page setup failed');
+      }
+      setAiResult(data.message || 'Page setup updated successfully.');
+      setPageSetupOpen(false);
+      await fetchContent();
+      await refreshDoc();
+      await refreshFullPreview();
+    } catch (err) {
+      alert(`Error applying page setup: ${err.message}`);
+    }
+  };
+
+  const handleTextSelection = (paraIndex) => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      setSelectionBubble(null);
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text) {
+      setSelectionBubble(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    setSelectionBubble({
+      position: { x: rect.left + rect.width / 2, y: rect.top },
+      text,
+      paraIndex,
+    });
+    setActiveSelection({ text, paraIndex });
+  };
+
+  const handleSelectionFormat = (type, value) => {
+    if (type === 'bold') {
+      document.execCommand('bold', false, null);
+    } else if (type === 'italic') {
+      document.execCommand('italic', false, null);
+    } else if (type === 'underline') {
+      document.execCommand('underline', false, null);
+    } else if (type === 'strike') {
+      document.execCommand('strikeThrough', false, null);
+    } else if (type === 'highlight') {
+      document.execCommand('hiliteColor', false, '#fef08a');
+    } else if (type === 'color') {
+      document.execCommand('foreColor', false, value);
+    } else if (type === 'font_name') {
+      document.execCommand('fontName', false, value);
+    } else if (type === 'font_size') {
+      document.execCommand('fontSize', false, '4');
+    }
+
+    if (selectionBubble && selectionBubble.paraIndex !== undefined) {
+      const pIdx = selectionBubble.paraIndex;
+      const el = document.getElementById(`para-${pIdx}`);
+      if (el) {
+        const extracted = extractRunsFromElement(el);
+        const key = paraKey(pIdx);
+        setPendingEdits((prev) => ({
+          ...prev,
+          [key]: {
+            kind: 'paragraph',
+            index: pIdx,
+            text: el.innerText,
+            runs: extracted,
+          },
+        }));
+      }
+    }
+  };
+
+  const handleSelectionAiPrompt = async (prompt) => {
+    if (!selectionBubble || !selectionBubble.text) return;
+    const pIdx = selectionBubble.paraIndex;
+    const key = paraKey(pIdx);
+    setRewriteBusy(true);
+    try {
+      const res = await fetch(`${API_URL}/documents/${doc.id}/rewrite`, {
+        method: 'POST',
+        headers: {
+          ...getAuthHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          instruction: prompt,
+          text: selectionBubble.text,
+          index: pIdx,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'AI rewrite failed');
+      const rewritten = (data.rewritten_text ?? '').trim();
+      if (rewritten) {
+        setDiffReviewData({
+          title: `AI Revision: "${prompt}"`,
+          originalText: selectionBubble.text,
+          newText: rewritten,
+          onAccept: () => {
+            document.execCommand('insertText', false, rewritten);
+            const el = document.getElementById(`para-${pIdx}`);
+            if (el) {
+              const extracted = extractRunsFromElement(el);
+              setPendingEdits((prev) => ({
+                ...prev,
+                [key]: {
+                  kind: 'paragraph',
+                  index: pIdx,
+                  text: el.innerText,
+                  runs: extracted,
+                },
+              }));
+            }
+          },
+        });
+      }
+    } catch (err) {
+      alert(`AI rewrite failed: ${err.message}`);
+    } finally {
+      setRewriteBusy(false);
+      setSelectionBubble(null);
+    }
+  };
 
   // Summary exports. The text is whatever is on screen, so what is downloaded is
   // what the user read.
@@ -1789,6 +1968,25 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
             </button>
           )}
           <button
+            onClick={() => setPageSetupOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition border border-slate-200 shadow-xs cursor-pointer"
+            title="Configure Page Setup & Layout"
+          >
+            <Layout className="w-3.5 h-3.5 text-slate-600" />
+            <span>Page Setup</span>
+          </button>
+          {doc.file_type === 'docx' && (
+            <button
+              onClick={handleInsertTable}
+              disabled={tableMutating}
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition border border-slate-200 shadow-xs cursor-pointer disabled:opacity-50"
+              title="Insert a Table into the document"
+            >
+              <TableIcon className="w-3.5 h-3.5 text-slate-600" />
+              <span>+ Table</span>
+            </button>
+          )}
+          <button
             onClick={() => { setHfInitialSection('both'); setHfModalOpen(true); }}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 hover:from-blue-100 hover:to-indigo-100 border border-blue-200/80 text-blue-700 font-bold rounded-xl text-xs transition shadow-xs"
             title="Edit Document Header & Footer"
@@ -2018,77 +2216,102 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                       docStream.map((item) => {
                         if (item.kind === 'table') {
                           const { table } = item;
+                          const isTableSelected = activeTableState?.tableIndex === table.table_index;
+                          const activeRow = isTableSelected ? activeTableState.row : 0;
+                          const activeCol = isTableSelected ? activeTableState.col : 0;
+
                           return (
                             <div
                               key={`tbl-${table.table_index}`}
-                              className="my-3 overflow-x-auto border border-slate-200 rounded-lg bg-white"
+                              className="my-4 border border-slate-200 rounded-xl overflow-hidden shadow-xs bg-white"
                             >
-                              <table className="w-full border-collapse text-[11px] text-slate-700">
-                                <tbody>
-                                  {table.rows.map((row, r) => (
-                                    <tr key={r} className={r % 2 ? 'bg-slate-50/60' : ''}>
-                                      {row.map((cell, c) => {
-                                        const key = cellKey(table.table_index, r, c);
-                                        const pending = pendingEdits[key];
-                                        const isEditing = editingIndex === key;
-                                        const hasUserEdit = pending !== undefined && pending.text !== cell;
-                                        const savedEdit = savedEdits[key];
-                                        const currentText = pending !== undefined ? pending.text : cell;
+                              {/* Visual Table Operations Toolbar (MOD-02) */}
+                              <div className="p-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                                <TableToolbar
+                                  tableIndex={table.table_index}
+                                  selectedRow={activeRow}
+                                  selectedCol={activeCol}
+                                  onAddRow={(pos, rIdx) => handleTableMutation('add_row', { table_index: table.table_index, position: pos, reference_index: rIdx })}
+                                  onDeleteRow={(rIdx) => handleTableMutation('delete_row', { table_index: table.table_index, reference_index: rIdx })}
+                                  onAddColumn={(pos, cIdx) => handleTableMutation('add_column', { table_index: table.table_index, position: pos, reference_index: cIdx })}
+                                  onDeleteColumn={(cIdx) => handleTableMutation('delete_column', { table_index: table.table_index, reference_index: cIdx })}
+                                  onDeleteTable={() => handleTableMutation('delete_table', { table_index: table.table_index })}
+                                  loading={tableMutating}
+                                />
+                              </div>
 
-                                        return (
-                                          <td
-                                            key={c}
-                                            onDoubleClick={() => { if (!isEditing) setEditingIndex(key); }}
-                                            title={isEditing ? undefined : 'Double-click to edit this cell'}
-                                            className={`border border-slate-200 px-2 py-1.5 align-top whitespace-pre-wrap leading-relaxed transition-colors ${
-                                              isEditing
-                                                ? 'bg-blue-50 ring-2 ring-inset ring-blue-400'
-                                                : hasUserEdit
-                                                  ? 'bg-amber-50/90 cursor-text'
-                                                  : 'cursor-text hover:bg-blue-50/60'
-                                            }`}
-                                          >
-                                            {isEditing ? (
-                                              <textarea
-                                                autoFocus
-                                                value={currentText}
-                                                onChange={(e) => setPendingEdits(
-                                                  (prev) => ({ ...prev, [key]: { ...(prev[key] || {}), kind: 'table_cell', table_index: table.table_index, row: r, col: c, text: e.target.value } }),
-                                                  key
-                                                )}
-                                                onKeyDown={(e) => {
-                                                  if (e.key === 'Escape') {
-                                                    e.stopPropagation();
-                                                    setEditingIndex(null);
-                                                  }
-                                                }}
-                                                className="w-full min-w-[120px] bg-white border border-blue-400 focus:border-blue-600 rounded-lg p-1.5 outline-none text-[11px] text-slate-800 resize-y shadow-sm whitespace-pre-wrap"
-                                                style={{ fontFamily: fontName, fontSize: '11pt' }}
-                                              />
-                                            ) : (
-                                              <>
-                                                {currentText ? (
-                                                  hasUserEdit && savedEdit
-                                                    ? highlightDiff(savedEdit.old, currentText)
-                                                    : currentText
-                                                ) : (
-                                                  <span className="text-slate-300 italic">empty</span>
-                                                )}
-                                                {hasUserEdit && (
-                                                  <span className="block mt-1 text-[7px] font-bold text-amber-700 uppercase tracking-widest">
-                                                    Edited
-                                                  </span>
-                                                )}
-                                              </>
-                                            )}
-                                          </td>
-                                        );
-                                      })}
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                              <span className="block px-2 py-1 text-[7px] font-bold text-slate-400 uppercase bg-slate-50 border-t border-slate-100 rounded-b-lg">
+                              <div className="overflow-x-auto">
+                                <table className="w-full border-collapse text-[11px] text-slate-700">
+                                  <tbody>
+                                    {table.rows.map((row, r) => (
+                                      <tr key={r} className={r === 0 ? 'bg-slate-100/70 font-semibold' : r % 2 ? 'bg-slate-50/60' : ''}>
+                                        {row.map((cell, c) => {
+                                          const key = cellKey(table.table_index, r, c);
+                                          const pending = pendingEdits[key];
+                                          const isEditing = editingIndex === key;
+                                          const hasUserEdit = pending !== undefined && pending.text !== cell;
+                                          const savedEdit = savedEdits[key];
+                                          const currentText = pending !== undefined ? pending.text : cell;
+                                          const isCellSelected = isTableSelected && activeTableState.row === r && activeTableState.col === c;
+
+                                          return (
+                                            <td
+                                              key={c}
+                                              onClick={() => setActiveTableState({ tableIndex: table.table_index, row: r, col: c })}
+                                              onDoubleClick={() => { if (!isEditing) setEditingIndex(key); }}
+                                              title={isEditing ? undefined : 'Click to select / Double-click to edit'}
+                                              className={`border border-slate-200 px-2.5 py-2 align-top whitespace-pre-wrap leading-relaxed transition-colors ${
+                                                isEditing
+                                                  ? 'bg-blue-50 ring-2 ring-inset ring-blue-400'
+                                                  : isCellSelected
+                                                    ? 'bg-blue-50/70 ring-1 ring-inset ring-blue-300'
+                                                    : hasUserEdit
+                                                      ? 'bg-amber-50/90 cursor-text'
+                                                      : 'cursor-text hover:bg-blue-50/40'
+                                              }`}
+                                            >
+                                              {isEditing ? (
+                                                <textarea
+                                                  autoFocus
+                                                  value={currentText}
+                                                  onChange={(e) => setPendingEdits(
+                                                    (prev) => ({ ...prev, [key]: { ...(prev[key] || {}), kind: 'table_cell', table_index: table.table_index, row: r, col: c, text: e.target.value } }),
+                                                    key
+                                                  )}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === 'Escape') {
+                                                      e.stopPropagation();
+                                                      setEditingIndex(null);
+                                                    }
+                                                  }}
+                                                  className="w-full min-w-[120px] bg-white border border-blue-400 focus:border-blue-600 rounded-lg p-1.5 outline-none text-[11px] text-slate-800 resize-y shadow-sm whitespace-pre-wrap"
+                                                  style={{ fontFamily: fontName, fontSize: '11pt' }}
+                                                />
+                                              ) : (
+                                                <>
+                                                  {currentText ? (
+                                                    hasUserEdit && savedEdit
+                                                      ? highlightDiff(savedEdit.old, currentText)
+                                                      : currentText
+                                                  ) : (
+                                                    <span className="text-slate-300 italic">empty</span>
+                                                  )}
+                                                  {hasUserEdit && (
+                                                    <span className="block mt-1 text-[7px] font-bold text-amber-700 uppercase tracking-widest">
+                                                      Edited
+                                                    </span>
+                                                  )}
+                                                </>
+                                              )}
+                                            </td>
+                                          );
+                                        })}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <span className="block px-3 py-1 text-[8px] font-bold text-slate-400 uppercase bg-slate-50 border-t border-slate-100 rounded-b-lg">
                                 Table {table.table_index + 1} &middot; {table.n_rows} rows &times; {table.n_cols} columns &middot; double-click a cell to edit
                               </span>
                             </div>
@@ -2116,7 +2339,6 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
 
                         const p = item.paragraph;
                         const key = paraKey(p.index);
-                        const isEditing = editingIndex === key;
                         const pending = pendingEdits[key];
                         const hasUserEdit = pending !== undefined && pending.text !== p.text;
                         const savedEdit = savedEdits[key];
@@ -2124,89 +2346,96 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                         const isHighlighted = hasUserEdit || !!change || !!savedEdit;
                         const currentText = pending !== undefined ? pending.text : p.text;
                         const oldText = savedEdit ? savedEdit.old : (change ? change.old_text : p.text);
+
+                        // Alignment (MOD-03)
+                        const alignClass = p.alignment === 'center' ? 'text-center'
+                          : p.alignment === 'right' ? 'text-right'
+                          : p.alignment === 'justify' ? 'text-justify'
+                          : 'text-left';
+
+                        // Headings (Heading 1, 2, 3)
+                        const headingClass = p.heading_level === 1 ? 'text-2xl font-black text-slate-900 tracking-tight my-2.5'
+                          : p.heading_level === 2 ? 'text-xl font-bold text-slate-800 tracking-tight my-2'
+                          : p.heading_level === 3 ? 'text-lg font-bold text-slate-800 my-1.5'
+                          : '';
+
+                        // Lists (MOD-03)
+                        const isBullet = (p.style && p.style.toLowerCase().includes('bullet')) || p.is_list_item;
+                        const isNumbered = p.style && p.style.toLowerCase().includes('number');
+
                         const blockStyle = {
                           fontFamily: p.font_name || fontName,
-                          fontSize: `${p.font_size || fontSize}pt`,
+                          fontSize: p.heading_level ? undefined : `${p.font_size || fontSize}pt`,
                           fontWeight: p.bold ? 'bold' : 'normal',
                           fontStyle: p.italic ? 'italic' : 'normal',
                           textDecoration: p.underline ? 'underline' : 'none',
                           color: p.color || undefined,
-                          minHeight: '1.5rem'
+                          minHeight: '1.5rem',
                         };
 
                         return (
                           <div 
                             key={p.index} 
-                            className={`group relative p-3.5 rounded-xl transition duration-200 text-left cursor-pointer ${
+                            className={`group relative p-2.5 rounded-xl transition duration-150 ${alignClass} cursor-text ${
                               isHighlighted
                                 ? 'bg-amber-50/90 border border-amber-200/90 shadow-2xs my-1'
-                                : 'hover:bg-slate-50'
+                                : 'hover:bg-slate-50/80'
                             }`}
-                            onDoubleClick={() => { if (!isEditing) setEditingIndex(key); }}
                           >
-                            {isEditing ? (
-                              <div className="space-y-2">
-                                <textarea
-                                  autoFocus
-                                  value={currentText}
-                                  onChange={(e) => setPendingEdits(
-                                    (prev) => ({ ...prev, [key]: { kind: 'paragraph', index: p.index, text: e.target.value } }),
-                                    key
-                                  )}
-                                  className="w-full bg-white border border-blue-400 focus:border-blue-600 rounded-lg p-2 outline-none text-slate-800 resize-y shadow-sm"
-                                  style={{ fontFamily: p.font_name || fontName, fontSize: `${p.font_size || fontSize}pt`, fontWeight: p.bold ? 'bold' : 'normal', fontStyle: p.italic ? 'italic' : 'normal', textDecoration: p.underline ? 'underline' : 'none' }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Escape') setEditingIndex(null);
-                                  }}
-                                />
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <input
-                                    value={rewriteInstruction}
-                                    onChange={(e) => setRewriteInstruction(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        handleRewriteBlock({ key: String(p.index), index: p.index, text: currentText });
-                                      }
-                                    }}
-                                    placeholder="AI instruction: e.g. Fix grammar, Make formal..."
-                                    className="flex-1 min-w-[180px] px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-700 focus:border-blue-400 outline-none"
-                                  />
-                                  <button
-                                    onMouseDown={(e) => e.preventDefault()}
-                                    onClick={() => handleRewriteBlock({ key: String(p.index), index: p.index, text: currentText })}
-                                    disabled={rewriteBusy || !currentText}
-                                    className="px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:opacity-40 text-white font-bold rounded-lg text-[11px] flex items-center gap-1.5 shadow-sm transition"
-                                    title="Rewrite this paragraph with the local AI brain (Gemini fallback)"
-                                  >
-                                    {rewriteBusy && rewritingIndex === String(p.index) ? (
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                    ) : (
-                                      <Wand2 className="w-3.5 h-3.5" />
-                                    )}
-                                    <span>{rewriteBusy && rewritingIndex === String(p.index) ? 'Rewriting...' : 'AI Rewrite'}</span>
-                                  </button>
-                                  <button
-                                    onMouseDown={(e) => e.preventDefault()}
-                                    onClick={() => setEditingIndex(null)}
-                                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-lg text-[11px] transition"
-                                  >
-                                    Done
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <p 
-                                className="text-slate-800 leading-relaxed break-words font-medium" 
+                            <div className="flex items-start gap-2">
+                              {isBullet && <span className="text-slate-400 select-none mt-1 font-bold text-base leading-none">•</span>}
+                              {isNumbered && <span className="text-slate-400 select-none text-xs mt-1 font-bold">{p.index + 1}.</span>}
+                              <div
+                                id={`para-${p.index}`}
+                                contentEditable
+                                suppressContentEditableWarning
+                                onMouseUp={() => handleTextSelection(p.index)}
+                                onKeyUp={() => handleTextSelection(p.index)}
+                                onBlur={(e) => {
+                                  const textVal = e.currentTarget.innerText;
+                                  const runsVal = extractRunsFromElement(e.currentTarget);
+                                  if (textVal !== p.text || (runsVal && runsVal.length > 0)) {
+                                    setPendingEdits((prev) => ({
+                                      ...prev,
+                                      [key]: {
+                                        kind: 'paragraph',
+                                        index: p.index,
+                                        text: textVal,
+                                        runs: runsVal,
+                                        alignment: p.alignment,
+                                        style: p.style,
+                                        heading_level: p.heading_level,
+                                      },
+                                    }));
+                                  }
+                                }}
+                                className={`flex-1 outline-none text-slate-800 leading-relaxed break-words font-medium ${headingClass}`}
                                 style={blockStyle}
                               >
-                                {currentText ? (isHighlighted ? highlightDiff(oldText, currentText) : currentText) : (
-                                  <span className="text-slate-300 italic font-normal text-sm">Empty paragraph. Click to write...</span>
+                                {p.runs && p.runs.length > 0 ? (
+                                  p.runs.map((r, rIdx) => (
+                                    <span
+                                      key={rIdx}
+                                      style={{
+                                        fontWeight: r.bold ? 'bold' : 'inherit',
+                                        fontStyle: r.italic ? 'italic' : 'inherit',
+                                        textDecoration: r.underline ? (r.strike ? 'underline line-through' : 'underline') : (r.strike ? 'line-through' : 'inherit'),
+                                        color: r.color || 'inherit',
+                                        fontSize: r.font_size ? `${r.font_size}pt` : 'inherit',
+                                        fontFamily: r.font_name || 'inherit',
+                                        backgroundColor: r.highlight ? '#fef08a' : undefined,
+                                      }}
+                                    >
+                                      {r.text}
+                                    </span>
+                                  ))
+                                ) : (
+                                  currentText || <span className="text-slate-300 italic font-normal text-sm">Empty paragraph...</span>
                                 )}
-                              </p>
-                            )}
-                            {isHighlighted && !isEditing && (
-                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              </div>
+                            </div>
+                            {isHighlighted && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1.5 select-none">
                                 <span className="inline-flex items-center gap-1 text-[8px] font-bold text-amber-800 uppercase tracking-widest bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-md">
                                   <span>{hasUserEdit ? 'User Edit Highlighted' : savedEdit ? 'Edited Highlighted' : 'AI Edit Highlighted'}</span>
                                   {(change || savedEdit) && (
@@ -2218,11 +2447,6 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                                   )}
                                 </span>
                               </div>
-                            )}
-                            {!isHighlighted && !isEditing && (
-                              <span className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 transition text-[8px] font-bold text-blue-500 uppercase tracking-widest bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md pointer-events-none">
-                                Do you want to edit? (Double-click)
-                              </span>
                             )}
                           </div>
                         );
@@ -3491,6 +3715,30 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           </button>
         </div>
       )}
+
+      {/* Selection Formatting Bubble (MOD-04) */}
+      <SelectionBubble
+        position={selectionBubble?.position}
+        selectedText={selectionBubble?.text}
+        onFormat={handleSelectionFormat}
+        onAiPrompt={handleSelectionAiPrompt}
+        onClose={() => setSelectionBubble(null)}
+      />
+
+      {/* Page Setup & Layout Dialog (MOD-05) */}
+      <PageSetupDialog
+        isOpen={pageSetupOpen}
+        onClose={() => setPageSetupOpen(false)}
+        onApply={handlePageSetupApply}
+        currentOrientation="portrait"
+      />
+
+      {/* Side-by-Side Diff Review Modal (MOD-09) */}
+      <DiffReviewModal
+        isOpen={!!diffReviewData}
+        onClose={() => setDiffReviewData(null)}
+        diffData={diffReviewData}
+      />
     </div>
   );
 };

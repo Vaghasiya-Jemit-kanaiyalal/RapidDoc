@@ -61,10 +61,41 @@ class TextEditItem(BaseModel):
     table_index: Optional[int] = None
     row: Optional[int] = None
     col: Optional[int] = None
-    text: str
+    text: Optional[str] = None
+    runs: Optional[List[Dict[str, Any]]] = None  # Inline rich text run span formatting
+    alignment: Optional[str] = None              # "left", "center", "right", "justify"
+    style: Optional[str] = None                  # Paragraph style e.g. "Heading 1", "List Bullet"
+    heading_level: Optional[int] = None
 
 class ContentUpdateRequest(BaseModel):
     edits: List[TextEditItem]
+
+class TableMutationRequest(BaseModel):
+    operation: str  # "insert_table", "add_row", "add_column", "delete_row", "delete_column", "delete_table"
+    table_index: Optional[int] = 0
+    position: Optional[str] = "below"  # "above", "below", "left", "right"
+    reference_index: Optional[int] = None
+    rows: Optional[int] = 3
+    cols: Optional[int] = 3
+    after_paragraph_index: Optional[int] = None
+    header_title: Optional[str] = "New Column"
+
+class PageSetupRequest(BaseModel):
+    orientation: Optional[str] = None  # "portrait", "landscape"
+    margin_inches: Optional[float] = None
+    page_size: Optional[str] = None  # "A4", "Letter"
+    page_break_after: Optional[int] = None  # paragraph index to insert page break
+
+class ImageMutationRequest(BaseModel):
+    operation: str  # "insert", "move", "delete"
+    image_index: Optional[int] = None
+    direction: Optional[str] = None  # "up", "down"
+    after_paragraph_index: Optional[int] = None
+    width_inches: Optional[float] = 4.0
+    image_base64: Optional[str] = None
+
+class HeadingNumberingRequest(BaseModel):
+    style: Optional[str] = "hierarchical"
 
 class FindReplaceRequest(BaseModel):
     find_text: str

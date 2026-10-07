@@ -1,7 +1,9 @@
 import docx
 from docx.shared import Pt, RGBColor, Inches
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.enum.section import WD_ORIENT
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import qn, nsdecls
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 import copy
@@ -349,17 +351,46 @@ def _paragraph_descriptor(paragraph, index: int) -> dict:
     except Exception:
         color = None
     style_name = _paragraph_style_name(paragraph)
+
+    runs_data = []
+    for r in paragraph.runs:
+        if not r.text:
+            continue
+        r_color = None
+        try:
+            if r.font.color and r.font.color.rgb:
+                r_color = f"#{r.font.color.rgb}"
+        except Exception:
+            pass
+        runs_data.append({
+            "text": r.text,
+            "bold": bool(r.font.bold) if r.font.bold is not None else False,
+            "italic": bool(r.font.italic) if r.font.italic is not None else False,
+            "underline": bool(r.font.underline) if r.font.underline is not None else False,
+            "strike": bool(r.font.strike) if r.font.strike is not None else False,
+            "color": r_color,
+            "font_size": r.font.size.pt if r.font.size is not None else None,
+            "font_name": r.font.name or None,
+        })
+
+    align_str = "left"
+    if paragraph.alignment is not None:
+        try:
+            align_str = str(paragraph.alignment).split(".")[-1].lower()
+        except Exception:
+            align_str = "left"
+
     return {
         "index": index,
         "text": paragraph.text,
+        "runs": runs_data,
+        "alignment": align_str,
         "font_name": (run_font.font.name if run_font is not None else None),
         "font_size": (run_font.font.size.pt if run_font is not None and run_font.font.size is not None else None),
         "bold": (run_font.font.bold if run_font is not None else None),
         "italic": (run_font.font.italic if run_font is not None else None),
         "underline": (run_font.font.underline if run_font is not None else None),
         "color": color,
-        # Structural signals the PPTX builder needs. Additive only, so every
-        # existing consumer of this dict keeps working.
         "style": style_name,
         "heading_level": _heading_level(paragraph, style_name),
         "is_list_item": _is_list_item(paragraph, style_name),
@@ -1207,13 +1238,9 @@ def _set_table_cell_text(table, row_idx: int, col_idx: int, new_text: str) -> bo
 
 
 def update_docx_content(doc_path: str, output_path: str, edits: list) -> bool:
-    """Apply paragraph and table-cell edits to a DOCX file.
-
-    Each edit is ``{"index": int, "text": str}`` for a body paragraph, or
-    ``{"table_index": int, "row": int, "col": int, "text": str}`` for a table
-    cell. Table edits used to be dropped on the floor because this function
-    only walked ``doc.paragraphs``, which is why table content could be read in
-    the editor but never written back.
+    """Apply paragraph and table-cell edits to a DOCX file, including run-level
+    inline formatting (bold, italic, underline, color, font size), paragraph
+    alignment, heading levels, and list styles.
     """
     try:
         doc = docx.Document(doc_path)
@@ -1225,15 +1252,80 @@ def update_docx_content(doc_path: str, output_path: str, edits: list) -> bool:
                 continue
             if edit.get("table_index") is not None:
                 cell_edits[edit["table_index"]] = cell_edits.get(edit["table_index"], {})
-                cell_edits[edit["table_index"]][(edit.get("row"), edit.get("col"))] = edit.get("text") or ""
+                cell_edits[edit["table_index"]][(edit.get("row"), edit.get("col"))] = edit
             elif edit.get("index") is not None:
-                paragraph_edits[edit["index"]] = edit.get("text") or ""
+                paragraph_edits[edit["index"]] = edit
 
         for idx, p in enumerate(doc.paragraphs):
             if idx in paragraph_edits:
-                new_text = paragraph_edits[idx]
-                if p.text != new_text:
+                p_edit = paragraph_edits[idx]
+                if isinstance(p_edit, str):
+                    p_edit = {"text": p_edit}
+                runs = p_edit.get("runs")
+                alignment = p_edit.get("alignment")
+                style = p_edit.get("style")
+                heading_level = p_edit.get("heading_level")
+                new_text = p_edit.get("text")
+
+                # Handle runs reconstruction if runs are provided
+                if runs and isinstance(runs, list) and len(runs) > 0:
+                    for r in list(p.runs):
+                        p._p.remove(r._r)
+                    for r_item in runs:
+                        r_text = r_item.get("text", "")
+                        if not r_text:
+                            continue
+                        r = p.add_run(r_text)
+                        if r_item.get("bold") is not None:
+                            r.bold = bool(r_item["bold"])
+                        if r_item.get("italic") is not None:
+                            r.italic = bool(r_item["italic"])
+                        if r_item.get("underline") is not None:
+                            r.underline = bool(r_item["underline"])
+                        if r_item.get("strike") is not None:
+                            r.font.strike = bool(r_item["strike"])
+                        if r_item.get("color"):
+                            c = str(r_item["color"]).lstrip("#")
+                            if len(c) == 6:
+                                try:
+                                    r.font.color.rgb = RGBColor.from_string(c)
+                                except Exception:
+                                    pass
+                        if r_item.get("font_size"):
+                            try:
+                                r.font.size = Pt(float(r_item["font_size"]))
+                            except Exception:
+                                pass
+                        if r_item.get("font_name"):
+                            r.font.name = str(r_item["font_name"])
+                        if r_item.get("highlight"):
+                            _el_highlight_yellow(r._r)
+                elif new_text is not None and p.text != new_text:
                     replace_paragraph_text_preserving_format(p, new_text, old_text=p.text)
+
+                # Alignment
+                if alignment:
+                    align_lower = str(alignment).lower()
+                    if align_lower in ("left", "wd_align_paragraph.left"):
+                        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                    elif align_lower in ("center", "wd_align_paragraph.center"):
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    elif align_lower in ("right", "wd_align_paragraph.right"):
+                        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                    elif align_lower in ("justify", "wd_align_paragraph.justify"):
+                        p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+
+                # Heading / Style
+                if heading_level:
+                    try:
+                        p.style = f"Heading {heading_level}"
+                    except Exception:
+                        pass
+                elif style:
+                    try:
+                        p.style = style
+                    except Exception:
+                        pass
 
         if cell_edits:
             tables = doc.tables
@@ -1245,8 +1337,9 @@ def update_docx_content(doc_path: str, output_path: str, edits: list) -> bool:
                     )
                     continue
                 table = tables[table_index]
-                for (row_idx, col_idx), new_text in cells.items():
-                    _set_table_cell_text(table, row_idx, col_idx, new_text)
+                for (row_idx, col_idx), cell_data in cells.items():
+                    c_text = cell_data.get("text") if isinstance(cell_data, dict) else str(cell_data or "")
+                    _set_table_cell_text(table, row_idx, col_idx, c_text)
 
         _save_docx_clean(doc, output_path)
         return True
@@ -1623,4 +1716,344 @@ def delete_docx_images(
     except Exception as e:
         logger.error("Error deleting images in DOCX: %s", e)
         return {"success": False, "deleted_images": 0, "message": f"Failed to delete images: {str(e)}"}
+
+
+# ---------------------------------------------------------------------------
+# Visual Table Operations (MOD-02)
+# ---------------------------------------------------------------------------
+
+def insert_docx_table(
+    doc_path: str,
+    output_path: str,
+    rows: int = 3,
+    cols: int = 3,
+    after_paragraph_index: int = None,
+) -> dict:
+    """Insert a new table into a DOCX document."""
+    try:
+        doc = docx.Document(doc_path)
+        table = doc.add_table(rows=max(1, rows), cols=max(1, cols))
+        table.style = 'Table Grid'
+
+        # Set placeholder header labels and cell text
+        for c_idx, cell in enumerate(table.rows[0].cells):
+            cell.text = f"Header {c_idx + 1}"
+        for row in table.rows[1:]:
+            for cell in row.cells:
+                cell.text = "—"
+
+        # Position after target paragraph if specified
+        if after_paragraph_index is not None and 0 <= after_paragraph_index < len(doc.paragraphs):
+            target_p = doc.paragraphs[after_paragraph_index]
+            target_p._p.addnext(table._tbl)
+
+        _save_docx_clean(doc, output_path)
+        return {
+            "success": True,
+            "rows": rows,
+            "cols": cols,
+            "table_index": len(doc.tables) - 1,
+            "message": f"Done — inserted a {rows}x{cols} table.",
+        }
+    except Exception as e:
+        logger.error("Error inserting table in DOCX: %s", e)
+        return {"success": False, "message": f"Failed to insert table: {str(e)}"}
+
+
+def add_docx_table_row(
+    doc_path: str,
+    output_path: str,
+    table_index: int = 0,
+    position: str = "below",
+    reference_index: int = None,
+) -> dict:
+    """Add a row above or below a reference row in a DOCX table."""
+    try:
+        doc = docx.Document(doc_path)
+        tables = doc.tables
+        if not tables or table_index < 0 or table_index >= len(tables):
+            return {"success": False, "message": f"Table {table_index + 1} not found."}
+
+        tbl = tables[table_index]
+        if not tbl.rows:
+            return {"success": False, "message": "Table has no rows."}
+
+        num_cols = len(tbl.rows[0].cells)
+        new_row = tbl.add_row()
+        for cell in new_row.cells:
+            cell.text = "—"
+
+        if reference_index is not None and 0 <= reference_index < len(tbl.rows) - 1:
+            ref_tr = tbl.rows[reference_index]._tr
+            new_tr = new_row._tr
+            if position == "above":
+                ref_tr.addprevious(new_tr)
+            elif position == "below":
+                ref_tr.addnext(new_tr)
+
+        _save_docx_clean(doc, output_path)
+        return {
+            "success": True,
+            "table_index": table_index,
+            "total_rows": len(tbl.rows),
+            "message": f"Done — added a new row to Table {table_index + 1}.",
+        }
+    except Exception as e:
+        logger.error("Error adding table row in DOCX: %s", e)
+        return {"success": False, "message": f"Failed to add table row: {str(e)}"}
+
+
+def add_docx_table_column(
+    doc_path: str,
+    output_path: str,
+    table_index: int = 0,
+    position: str = "right",
+    reference_index: int = None,
+    header_title: str = "New Column",
+) -> dict:
+    """Add a column to the left or right of a reference column in a DOCX table."""
+    try:
+        doc = docx.Document(doc_path)
+        tables = doc.tables
+        if not tables or table_index < 0 or table_index >= len(tables):
+            return {"success": False, "message": f"Table {table_index + 1} not found."}
+
+        tbl = tables[table_index]
+        if not tbl.rows:
+            return {"success": False, "message": "Table has no rows."}
+
+        for r_idx, row in enumerate(tbl.rows):
+            cell_text = header_title if r_idx == 0 else "—"
+            tc = parse_xml(f'<w:tc {nsdecls("w")}><w:tcPr/><w:p><w:pPr/><w:r><w:t>{cell_text}</w:t></w:r></w:p></w:tc>')
+            if reference_index is not None and 0 <= reference_index < len(row.cells):
+                ref_tc = row.cells[reference_index]._tc
+                if position == "left":
+                    ref_tc.addprevious(tc)
+                else:
+                    ref_tc.addnext(tc)
+            else:
+                row._tr.append(tc)
+
+        # Update tblGrid
+        tblGrid = tbl._tbl.find(qn("w:tblGrid"))
+        if tblGrid is not None:
+            new_grid = parse_xml(f'<w:gridCol {nsdecls("w")} w:w="2160"/>')
+            tblGrid.append(new_grid)
+
+        _save_docx_clean(doc, output_path)
+        return {
+            "success": True,
+            "table_index": table_index,
+            "message": f"Done — added column '{header_title}' to Table {table_index + 1}.",
+        }
+    except Exception as e:
+        logger.error("Error adding table column in DOCX: %s", e)
+        return {"success": False, "message": f"Failed to add table column: {str(e)}"}
+
+
+# ---------------------------------------------------------------------------
+# In-Flow Image Operations (MOD-06)
+# ---------------------------------------------------------------------------
+
+def insert_docx_image(
+    doc_path: str,
+    output_path: str,
+    image_bytes: bytes,
+    after_paragraph_index: int = None,
+    width_inches: float = 4.0,
+) -> dict:
+    """Insert a new image directly into the document flow."""
+    try:
+        doc = docx.Document(doc_path)
+        new_p = doc.add_paragraph()
+        run = new_p.add_run()
+        run.add_picture(io.BytesIO(image_bytes), width=Inches(max(0.5, float(width_inches))))
+
+        if after_paragraph_index is not None and 0 <= after_paragraph_index < len(doc.paragraphs):
+            target_p = doc.paragraphs[after_paragraph_index]
+            target_p._p.addnext(new_p._p)
+
+        _save_docx_clean(doc, output_path)
+        return {
+            "success": True,
+            "message": "Done — inserted image into the document.",
+        }
+    except Exception as e:
+        logger.error("Error inserting image into DOCX: %s", e)
+        return {"success": False, "message": f"Failed to insert image: {str(e)}"}
+
+
+def move_docx_image(
+    doc_path: str,
+    output_path: str,
+    image_index: int,
+    direction: str = "up",
+    target_paragraph_index: int = None,
+) -> dict:
+    """Move an image within the document relative to surrounding paragraphs."""
+    try:
+        doc = docx.Document(doc_path)
+        targets = collect_docx_image_targets(doc)
+        target = next((t for t in targets if t.get("index") == image_index), None)
+        if not target or not target.get("blips"):
+            return {"success": False, "message": f"Image {image_index + 1} not found."}
+
+        blip = target["blips"][0]
+        drawing = _drawing_for_blip(blip)
+        if drawing is None:
+            return {"success": False, "message": "Image container could not be located."}
+
+        parent_p = drawing.getparent()
+        while parent_p is not None and parent_p.tag != qn("w:p"):
+            parent_p = parent_p.getparent()
+
+        if parent_p is None:
+            return {"success": False, "message": "Image paragraph could not be located."}
+
+        if target_paragraph_index is not None and 0 <= target_paragraph_index < len(doc.paragraphs):
+            dest_p = doc.paragraphs[target_paragraph_index]._p
+            dest_p.addnext(parent_p)
+        else:
+            prev_sibling = parent_p.getprevious()
+            next_sibling = parent_p.getnext()
+            if direction == "up" and prev_sibling is not None:
+                prev_sibling.addprevious(parent_p)
+            elif direction == "down" and next_sibling is not None:
+                next_sibling.addnext(parent_p)
+            else:
+                return {"success": False, "message": f"Cannot move image further {direction}."}
+
+        _save_docx_clean(doc, output_path)
+        return {
+            "success": True,
+            "message": f"Done — moved image {image_index + 1} {direction}.",
+        }
+    except Exception as e:
+        logger.error("Error moving image in DOCX: %s", e)
+        return {"success": False, "message": f"Failed to move image: {str(e)}"}
+
+
+# ---------------------------------------------------------------------------
+# Page Setup & Layout Operations (MOD-05)
+# ---------------------------------------------------------------------------
+
+def update_docx_page_setup(
+    doc_path: str,
+    output_path: str,
+    orientation: str = None,
+    margin_inches: float = None,
+    page_size: str = None,
+) -> dict:
+    """Apply page orientation, margin sizing, and paper dimensions."""
+    try:
+        doc = docx.Document(doc_path)
+        for section in doc.sections:
+            if orientation:
+                ori_lower = orientation.lower()
+                if ori_lower == "landscape":
+                    section.orientation = WD_ORIENT.LANDSCAPE
+                    w, h = section.page_width, section.page_height
+                    if w < h:
+                        section.page_width, section.page_height = h, w
+                elif ori_lower == "portrait":
+                    section.orientation = WD_ORIENT.PORTRAIT
+                    w, h = section.page_width, section.page_height
+                    if w > h:
+                        section.page_width, section.page_height = h, w
+
+            if page_size:
+                ps_lower = page_size.lower()
+                is_landscape = (section.orientation == WD_ORIENT.LANDSCAPE)
+                if "a4" in ps_lower:
+                    w_in, h_in = (11.69, 8.27) if is_landscape else (8.27, 11.69)
+                    section.page_width = Inches(w_in)
+                    section.page_height = Inches(h_in)
+                elif "letter" in ps_lower:
+                    w_in, h_in = (11.0, 8.5) if is_landscape else (8.5, 11.0)
+                    section.page_width = Inches(w_in)
+                    section.page_height = Inches(h_in)
+
+            if margin_inches is not None:
+                m = Inches(float(margin_inches))
+                section.top_margin = m
+                section.bottom_margin = m
+                section.left_margin = m
+                section.right_margin = m
+
+        _save_docx_clean(doc, output_path)
+        details = []
+        if orientation: details.append(orientation)
+        if page_size: details.append(page_size)
+        if margin_inches is not None: details.append(f"{margin_inches} in margins")
+        return {
+            "success": True,
+            "message": f"Done — updated page setup ({', '.join(details)}).",
+        }
+    except Exception as e:
+        logger.error("Error updating page setup in DOCX: %s", e)
+        return {"success": False, "message": f"Failed to update page setup: {str(e)}"}
+
+
+def insert_docx_page_break(
+    doc_path: str,
+    output_path: str,
+    paragraph_index: int,
+) -> dict:
+    """Insert a page break after a specific paragraph."""
+    try:
+        doc = docx.Document(doc_path)
+        if paragraph_index < 0 or paragraph_index >= len(doc.paragraphs):
+            return {"success": False, "message": "Target paragraph index out of range."}
+
+        target_p = doc.paragraphs[paragraph_index]
+        pb_p = doc.add_paragraph()
+        pb_p.add_run().add_break(WD_BREAK.PAGE)
+        target_p._p.addnext(pb_p._p)
+
+        _save_docx_clean(doc, output_path)
+        return {
+            "success": True,
+            "message": f"Done — inserted page break after paragraph {paragraph_index + 1}.",
+        }
+    except Exception as e:
+        logger.error("Error inserting page break in DOCX: %s", e)
+        return {"success": False, "message": f"Failed to insert page break: {str(e)}"}
+
+
+# ---------------------------------------------------------------------------
+# Heading Numbering & TOC (MOD-10)
+# ---------------------------------------------------------------------------
+
+def apply_hierarchical_heading_numbers(doc_path: str, output_path: str) -> dict:
+    """Apply hierarchical numbering (1, 1.1, 1.1.1) to document headings."""
+    try:
+        doc = docx.Document(doc_path)
+        counters = [0, 0, 0]
+        modified_count = 0
+
+        for p in doc.paragraphs:
+            style_name = (p.style.name or "").lower() if p.style else ""
+            lvl = _heading_level(p, style_name)
+            if lvl in (1, 2, 3):
+                counters[lvl - 1] += 1
+                for i in range(lvl, 3):
+                    counters[i] = 0
+                prefix = ".".join(str(counters[i]) for i in range(lvl)) + ". "
+                # Remove any existing leading numeric prefix
+                clean_text = re.sub(r"^([0-9]+\.)*\s*", "", p.text)
+                p.text = prefix + clean_text
+                modified_count += 1
+
+        if modified_count > 0:
+            _save_docx_clean(doc, output_path)
+            return {
+                "success": True,
+                "modified_count": modified_count,
+                "message": f"Done — applied hierarchical numbering to {modified_count} heading(s).",
+            }
+        return {"success": False, "modified_count": 0, "message": "No headings found to number."}
+    except Exception as e:
+        logger.error("Error applying heading numbers in DOCX: %s", e)
+        return {"success": False, "message": f"Failed to apply heading numbers: {str(e)}"}
+
 

@@ -22,7 +22,9 @@ from RapidDoc.backend.app.services.docx_editor import (
     apply_docx_styling, get_docx_images_count, get_docx_content, update_docx_content, find_replace_docx,
     find_text_variants, selective_replace_docx, iter_docx_body_items, get_docx_image_parts,
     get_docx_document_view, replace_docx_images, resize_docx_images,
-    delete_docx_table_column, delete_docx_table_row, delete_docx_table, style_docx_headings, delete_docx_images
+    delete_docx_table_column, delete_docx_table_row, delete_docx_table, style_docx_headings, delete_docx_images,
+    insert_docx_table, add_docx_table_row, add_docx_table_column, insert_docx_image, move_docx_image,
+    update_docx_page_setup, insert_docx_page_break, apply_hierarchical_heading_numbers
 )
 from RapidDoc.backend.app.services.pdf_editor import (
     apply_pdf_styling, get_pdf_images_count, get_pdf_content, update_pdf_content, find_replace_pdf,
@@ -50,7 +52,12 @@ from RapidDoc.backend.app.services.summary_export import (
     SUPPORTED_FORMATS as SUPPORTED_SUMMARY_FORMATS,
     build_summary_bytes,
 )
-from RapidDoc.backend.app.models import DocumentMetadata, ContentUpdateRequest, FindReplaceRequest, AICommandRequest, FindVariantsRequest, SelectiveReplaceRequest, HeaderFooterRequest, PipelineUpdateRequest, RewriteRequest, SummarizeRequest, GenerateMCQRequest, ImageResizeRequest, SummaryExportRequest
+from RapidDoc.backend.app.models import (
+    DocumentMetadata, ContentUpdateRequest, FindReplaceRequest, AICommandRequest,
+    FindVariantsRequest, SelectiveReplaceRequest, HeaderFooterRequest, PipelineUpdateRequest,
+    RewriteRequest, SummarizeRequest, GenerateMCQRequest, ImageResizeRequest, SummaryExportRequest,
+    TableMutationRequest, PageSetupRequest, ImageMutationRequest, HeadingNumberingRequest
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1907,6 +1914,137 @@ async def ai_command_endpoint(
                 "message": "Done — applied document formatting.",
             }
 
+        if action == "insert_table":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Table insertion is currently supported for DOCX documents."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Insert Table")
+            rows = intent.get("rows", 3)
+            cols = intent.get("cols", 3)
+            res = await run_in_threadpool(insert_docx_table, active_path, active_path, rows=rows, cols=cols)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Inserted {rows}x{cols} table"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "insert_table", "engine": intent.get("engine"), "message": res.get("message", "Done — inserted table.")}
+
+        if action == "add_row":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Table operations are currently supported for DOCX documents."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Add table row")
+            tbl_idx = intent.get("table_index", 0)
+            pos = intent.get("position", "below")
+            res = await run_in_threadpool(add_docx_table_row, active_path, active_path, table_index=tbl_idx, position=pos)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": "Added table row"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "add_row", "engine": intent.get("engine"), "message": res.get("message", "Done — added row to table.")}
+
+        if action == "add_column":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Table operations are currently supported for DOCX documents."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Add table column")
+            tbl_idx = intent.get("table_index", 0)
+            pos = intent.get("position", "right")
+            title = intent.get("header_title", "New Column")
+            res = await run_in_threadpool(add_docx_table_column, active_path, active_path, table_index=tbl_idx, position=pos, header_title=title)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Added column '{title}' to table"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "add_column", "engine": intent.get("engine"), "message": res.get("message", "Done — added column to table.")}
+
+        if action == "page_setup":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Page setup is currently supported for DOCX documents."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Page Setup")
+            res = await run_in_threadpool(
+                update_docx_page_setup, active_path, active_path,
+                orientation=intent.get("orientation"),
+                margin_inches=intent.get("margin_inches"),
+                page_size=intent.get("page_size")
+            )
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": "Updated Page Setup"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "page_setup", "engine": intent.get("engine"), "message": res.get("message", "Done — updated page setup.")}
+
+        if action == "page_break":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Page break is currently supported for DOCX documents."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Page Break")
+            p_idx = intent.get("paragraph_index", 0)
+            res = await run_in_threadpool(insert_docx_page_break, active_path, active_path, paragraph_index=p_idx)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": "Inserted Page Break"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "page_break", "engine": intent.get("engine"), "message": res.get("message", "Done — inserted page break.")}
+
+        if action == "heading_numbering":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Heading numbering is currently supported for DOCX documents."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Hierarchical Headings")
+            res = await run_in_threadpool(apply_hierarchical_heading_numbers, active_path, active_path)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": "Applied Hierarchical Heading Numbers"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "heading_numbering", "engine": intent.get("engine"), "message": res.get("message", "Done — applied hierarchical numbering to headings.")}
+
+        if action == "move_image":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Image moving is currently supported for DOCX documents."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Move image")
+            img_idx = intent.get("image_index", 0)
+            direction = intent.get("direction", "down")
+            res = await run_in_threadpool(move_docx_image, active_path, active_path, image_index=img_idx, direction=direction)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Moved image {img_idx + 1} {direction}"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "move_image", "engine": intent.get("engine"), "message": res.get("message", f"Done — moved image {img_idx + 1} {direction}.")}
+
+        if action == "insert_image":
+            if doc["file_type"] != "docx":
+                return {"status": "success", "action": "unknown", "message": "Image insertion is currently supported for DOCX documents."}
+            raw_bytes = None
+            if request.image_base64:
+                try:
+                    header, _, encoded = request.image_base64.partition(",")
+                    b64_data = encoded if encoded else header
+                    raw_bytes = base64.b64decode(b64_data)
+                    read_and_validate_image(raw_bytes)
+                except Exception:
+                    raw_bytes = None
+            if not raw_bytes:
+                return {"status": "success", "action": "unknown", "message": "Please attach or paste an image to insert."}
+            active_path, version_fields = ensure_edited_version(doc, db, action="Insert Image")
+            after_p = intent.get("after_paragraph_index")
+            res = await run_in_threadpool(insert_docx_image, active_path, active_path, image_bytes=raw_bytes, after_paragraph_index=after_p)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": "Inserted Image"}},
+                 "$set": version_fields}
+            )
+            return {"status": "success", "action": "insert_image", "engine": intent.get("engine"), "message": res.get("message", "Done — inserted image into document.")}
+
         if action == "delete_column":
             if doc["file_type"] != "docx":
                 return {
@@ -1917,13 +2055,14 @@ async def ai_command_endpoint(
             active_path, version_fields = ensure_edited_version(doc, db, action="Delete table column")
             col_idx = intent.get("column_index", 1)
             tbl_idx = intent.get("table_index", "all")
-            modified_count = await run_in_threadpool(
+            res = await run_in_threadpool(
                 delete_docx_table_column,
                 active_path,
                 active_path,
                 col_idx=col_idx,
                 table_index=tbl_idx,
             )
+            modified_count = res.get("modified_tables", 0) if isinstance(res, dict) else res
             current_date = datetime.now().strftime("%Y-%m-%d")
             db.documents.update_one(
                 {"_id": ObjectId(doc_id)},
@@ -1935,7 +2074,7 @@ async def ai_command_endpoint(
                 "action": "delete_column",
                 "engine": intent.get("engine"),
                 "count": modified_count,
-                "message": f"Done — deleted column from {modified_count} table{'s' if modified_count != 1 else ''}.",
+                "message": res.get("message") if isinstance(res, dict) else f"Done — deleted column from {modified_count} table{'s' if modified_count != 1 else ''}.",
             }
 
         if action == "delete_row":
@@ -1948,13 +2087,14 @@ async def ai_command_endpoint(
             active_path, version_fields = ensure_edited_version(doc, db, action="Delete table row")
             row_idx = intent.get("row_index", 0)
             tbl_idx = intent.get("table_index", "all")
-            modified_count = await run_in_threadpool(
+            res = await run_in_threadpool(
                 delete_docx_table_row,
                 active_path,
                 active_path,
                 row_idx=row_idx,
                 table_index=tbl_idx,
             )
+            modified_count = res.get("modified_tables", 0) if isinstance(res, dict) else res
             current_date = datetime.now().strftime("%Y-%m-%d")
             db.documents.update_one(
                 {"_id": ObjectId(doc_id)},
@@ -1966,7 +2106,7 @@ async def ai_command_endpoint(
                 "action": "delete_row",
                 "engine": intent.get("engine"),
                 "count": modified_count,
-                "message": f"Done — deleted row from {modified_count} table{'s' if modified_count != 1 else ''}.",
+                "message": res.get("message") if isinstance(res, dict) else f"Done — deleted row from {modified_count} table{'s' if modified_count != 1 else ''}.",
             }
 
         if action == "delete_table":
@@ -1978,12 +2118,13 @@ async def ai_command_endpoint(
                 }
             active_path, version_fields = ensure_edited_version(doc, db, action="Delete table")
             tbl_idx = intent.get("table_index", "all")
-            modified_count = await run_in_threadpool(
+            res = await run_in_threadpool(
                 delete_docx_table,
                 active_path,
                 active_path,
                 table_index=tbl_idx,
             )
+            modified_count = res.get("deleted_tables", 0) if isinstance(res, dict) else res
             current_date = datetime.now().strftime("%Y-%m-%d")
             db.documents.update_one(
                 {"_id": ObjectId(doc_id)},
@@ -1995,7 +2136,7 @@ async def ai_command_endpoint(
                 "action": "delete_table",
                 "engine": intent.get("engine"),
                 "count": modified_count,
-                "message": f"Done — deleted {modified_count} table{'s' if modified_count != 1 else ''}.",
+                "message": res.get("message") if isinstance(res, dict) else f"Done — deleted {modified_count} table{'s' if modified_count != 1 else ''}.",
             }
 
         if action == "delete_image":
@@ -2007,12 +2148,13 @@ async def ai_command_endpoint(
                 }
             active_path, version_fields = ensure_edited_version(doc, db, action="Delete images")
             img_idx = intent.get("image_index", "all")
-            modified_count = await run_in_threadpool(
+            res = await run_in_threadpool(
                 delete_docx_images,
                 active_path,
                 active_path,
-                image_index=img_idx,
+                image_indexes=[img_idx] if isinstance(img_idx, int) else None,
             )
+            modified_count = res.get("deleted_images", 0) if isinstance(res, dict) else res
             current_date = datetime.now().strftime("%Y-%m-%d")
             db.documents.update_one(
                 {"_id": ObjectId(doc_id)},
@@ -2024,7 +2166,7 @@ async def ai_command_endpoint(
                 "action": "delete_image",
                 "engine": intent.get("engine"),
                 "count": modified_count,
-                "message": f"Done — removed {modified_count} image{'s' if modified_count != 1 else ''}.",
+                "message": res.get("message") if isinstance(res, dict) else f"Done — removed {modified_count} image{'s' if modified_count != 1 else ''}.",
             }
 
         if action == "image_module":
@@ -2420,6 +2562,216 @@ async def ai_command_endpoint(
     except Exception as e:
         logger.error("Error in AI command endpoint: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error while processing the AI command.")
+
+
+@router.post("/{doc_id}/tables/mutate")
+async def mutate_document_table(
+    doc_id: str,
+    request: TableMutationRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if doc["file_type"] != "docx":
+            raise HTTPException(status_code=400, detail="Table operations are currently supported for DOCX documents.")
+
+        active_path, version_fields = ensure_edited_version(doc, db, action=f"Table: {request.operation}")
+        result = {"success": False, "message": "Unknown table operation"}
+
+        if request.operation == "insert_table":
+            result = await run_in_threadpool(
+                insert_docx_table, active_path, active_path,
+                rows=request.rows or 3, cols=request.cols or 3,
+                after_paragraph_index=request.after_paragraph_index
+            )
+        elif request.operation == "add_row":
+            result = await run_in_threadpool(
+                add_docx_table_row, active_path, active_path,
+                table_index=request.table_index or 0,
+                position=request.position or "below",
+                reference_index=request.reference_index
+            )
+        elif request.operation == "add_column":
+            result = await run_in_threadpool(
+                add_docx_table_column, active_path, active_path,
+                table_index=request.table_index or 0,
+                position=request.position or "right",
+                reference_index=request.reference_index,
+                header_title=request.header_title or "New Column"
+            )
+        elif request.operation == "delete_row":
+            result = await run_in_threadpool(
+                delete_docx_table_row, active_path, active_path,
+                table_index=request.table_index,
+                row_index=request.reference_index if request.reference_index is not None else 0
+            )
+        elif request.operation == "delete_column":
+            result = await run_in_threadpool(
+                delete_docx_table_column, active_path, active_path,
+                table_index=request.table_index,
+                col_index=request.reference_index if request.reference_index is not None else 0
+            )
+        elif request.operation == "delete_table":
+            result = await run_in_threadpool(
+                delete_docx_table, active_path, active_path,
+                table_index=request.table_index
+            )
+
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Failed to perform table operation."))
+
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {
+                "$push": {"edit_history": {"date": current_date, "action": f"Table: {request.operation}"}},
+                "$set": {**version_fields, "last_edited_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            }
+        )
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error mutating table: %s", e)
+        raise HTTPException(status_code=500, detail=f"Internal error mutating table: {str(e)}")
+
+
+@router.post("/{doc_id}/page-setup")
+async def update_document_page_setup(
+    doc_id: str,
+    request: PageSetupRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if doc["file_type"] != "docx":
+            raise HTTPException(status_code=400, detail="Page setup is currently supported for DOCX documents.")
+
+        active_path, version_fields = ensure_edited_version(doc, db, action="Page Setup")
+        if request.page_break_after is not None:
+            result = await run_in_threadpool(
+                insert_docx_page_break, active_path, active_path,
+                paragraph_index=request.page_break_after
+            )
+        else:
+            result = await run_in_threadpool(
+                update_docx_page_setup, active_path, active_path,
+                orientation=request.orientation,
+                margin_inches=request.margin_inches,
+                page_size=request.page_size
+            )
+
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Failed to update page setup."))
+
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {
+                "$push": {"edit_history": {"date": current_date, "action": "Updated Page Setup"}},
+                "$set": {**version_fields, "last_edited_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            }
+        )
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error in page setup: %s", e)
+        raise HTTPException(status_code=500, detail=f"Internal error in page setup: {str(e)}")
+
+
+@router.post("/{doc_id}/insert-image")
+async def insert_document_image(
+    doc_id: str,
+    request: ImageMutationRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if doc["file_type"] != "docx":
+            raise HTTPException(status_code=400, detail="Image insertion is currently supported for DOCX documents.")
+
+        raw_bytes = None
+        if request.image_base64:
+            try:
+                header, _, encoded = request.image_base64.partition(",")
+                b64_data = encoded if encoded else header
+                raw_bytes = base64.b64decode(b64_data)
+                read_and_validate_image(raw_bytes)
+            except Exception:
+                raw_bytes = None
+
+        if not raw_bytes:
+            raise HTTPException(status_code=400, detail="Valid image data is required.")
+
+        active_path, version_fields = ensure_edited_version(doc, db, action="Insert Image")
+        result = await run_in_threadpool(
+            insert_docx_image, active_path, active_path,
+            image_bytes=raw_bytes,
+            after_paragraph_index=request.after_paragraph_index,
+            width_inches=request.width_inches or 4.0
+        )
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Failed to insert image."))
+
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {
+                "$push": {"edit_history": {"date": current_date, "action": "Inserted Image into document"}},
+                "$set": {**version_fields, "last_edited_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            }
+        )
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error inserting image: %s", e)
+        raise HTTPException(status_code=500, detail=f"Internal error inserting image: {str(e)}")
+
+
+@router.post("/{doc_id}/heading-numbers")
+async def number_document_headings(
+    doc_id: str,
+    request: HeadingNumberingRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if doc["file_type"] != "docx":
+            raise HTTPException(status_code=400, detail="Heading numbering is currently supported for DOCX documents.")
+
+        active_path, version_fields = ensure_edited_version(doc, db, action="Hierarchical Headings")
+        result = await run_in_threadpool(apply_hierarchical_heading_numbers, active_path, active_path)
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("message", "Failed to number headings."))
+
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        db.documents.update_one(
+            {"_id": ObjectId(doc_id)},
+            {
+                "$push": {"edit_history": {"date": current_date, "action": "Applied Hierarchical Heading Numbers"}},
+                "$set": {**version_fields, "last_edited_date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            }
+        )
+        return {"status": "success", **result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error numbering headings: %s", e)
+        raise HTTPException(status_code=500, detail=f"Internal error numbering headings: {str(e)}")
 
 @router.post("/{doc_id}/find-variants")
 async def find_document_variants(

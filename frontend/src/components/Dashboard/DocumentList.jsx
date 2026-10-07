@@ -26,16 +26,6 @@ export const DocumentList = ({ documents, loading = false, onSelectDocument, onD
     );
   }
 
-  const getStageLabel = (stage) => {
-    switch (stage) {
-      case 1: return 'Ingested';
-      case 2: return 'Header/Footer';
-      case 3: return 'AI Edit';
-      case 4: return 'Finalized';
-      default: return 'Ingested';
-    }
-  };
-
   return (
     <div className="overflow-hidden border border-borderline/80 rounded-3xl bg-white/80 backdrop-blur-xl shadow-card">
       <div className="overflow-x-auto">
@@ -44,16 +34,13 @@ export const DocumentList = ({ documents, loading = false, onSelectDocument, onD
             <tr className="bg-slate-50/80 border-b border-borderline/60">
               <th className="p-4 sm:px-6 text-xs font-bold uppercase tracking-wider text-secondary">Document Name</th>
               <th className="p-4 text-xs font-bold uppercase tracking-wider text-secondary">Type</th>
-              <th className="p-4 text-xs font-bold uppercase tracking-wider text-secondary">Pipeline Progress</th>
               <th className="p-4 text-xs font-bold uppercase tracking-wider text-secondary">Uploaded</th>
               <th className="p-4 sm:px-6 text-xs font-bold uppercase tracking-wider text-secondary text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-borderline/40">
             {documents.map((doc) => {
-              const stage = doc.pipeline_stage || 1;
-              const percent = doc.completion_percent || 25;
-              const isFinalized = stage === 4 || doc.pipeline_status === 'Finalized';
+              const isFinalized = (doc.pipeline_stage || 1) === 4 || doc.pipeline_status === 'Finalized';
               const isPdf = doc.file_type?.toLowerCase() === 'pdf';
 
               return (
@@ -92,26 +79,6 @@ export const DocumentList = ({ documents, loading = false, onSelectDocument, onD
                     }`}>
                       {doc.file_type}
                     </span>
-                  </td>
-                  <td className="p-4">
-                    <div className="space-y-1.5 max-w-[160px]">
-                      <div className="flex justify-between items-center text-[11px] font-bold">
-                        <span className={isFinalized ? 'text-emerald-700' : 'text-brand-700'}>
-                          Stage {stage}/4: {getStageLabel(stage)}
-                        </span>
-                        <span className="text-secondary">{percent}%</span>
-                      </div>
-                      <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-borderline/40">
-                        <div 
-                          className={`h-full rounded-full transition-all duration-500 ${
-                            isFinalized 
-                              ? 'bg-gradient-to-r from-emerald-500 to-teal-500' 
-                              : 'bg-gradient-to-r from-brand-500 to-indigo-600'
-                          }`}
-                          style={{ width: `${percent}%` }}
-                        />
-                      </div>
-                    </div>
                   </td>
                   <td className="p-4">
                     <div className="flex items-center gap-1.5 text-secondary text-xs font-medium">

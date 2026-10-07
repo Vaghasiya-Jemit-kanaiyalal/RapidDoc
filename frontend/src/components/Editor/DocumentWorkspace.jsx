@@ -516,6 +516,8 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   const [aiReplaceText, setAiReplaceText] = useState('');
   const [aiChanges, setAiChanges] = useState([]); // [{paragraph, index, old_text, new_text}]
   const [aiSummary, setAiSummary] = useState(null); // {summary, source, engine, length}
+  const [commandHistory, setCommandHistory] = useState([]); // conversation memory for universal command bar
+  const [activeSelection, setActiveSelection] = useState(null); // active selected text context
 
   // Summary exports. The text is whatever is on screen, so what is downloaded is
   // what the user read.
@@ -736,6 +738,41 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
       });
     return () => { cancelled = true; };
   }, [token]);
+
+  // Track user text selection across the document workspace
+  useEffect(() => {
+    const handleSelection = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return;
+      const text = sel.toString().trim();
+      if (text && text.length > 0) {
+        setActiveSelection({ text, type: 'text' });
+      }
+    };
+    document.addEventListener('selectionchange', handleSelection);
+    return () => document.removeEventListener('selectionchange', handleSelection);
+  }, []);
+
+  // Auto-dismiss the "Changes applied" card and success result notice after 2 seconds
+  useEffect(() => {
+    const isChangeNotification =
+      aiChanges.length > 0 ||
+      (aiResult &&
+        (aiResult.startsWith('Applied ') ||
+          aiResult.startsWith('Updated ') ||
+          aiResult.startsWith('Changed ') ||
+          aiResult.startsWith('Done — ') ||
+          aiResult.startsWith('Done - ') ||
+          aiResult.includes('replaced successfully')));
+
+    if (isChangeNotification) {
+      const timer = setTimeout(() => {
+        setAiChanges([]);
+        setAiResult((prev) => (prev && !prev.startsWith('Error') ? '' : prev));
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [aiChanges, aiResult]);
 
   const handleDownload = async (format = 'original', theme) => {
     const chosen = format === 'pptx' ? (theme || pptxTheme) : '';
@@ -1222,9 +1259,6 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     }
 
     setAiProcessing(true);
-    // Clear immediately, before awaiting anything. Leaving the text in the box
-    // until the request resolved is what made the old prompt look like it was
-    // "still there" - and re-typing a second question then appended to it.
     setAiPrompt('');
     setAiResult('');
     setAiInteractiveMode('none');
@@ -1236,10 +1270,22 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     setQuizPicks({});
     setQuizMode(false);
 
+    let imageBase64 = null;
+    if (attachedFile) {
+      try {
+        imageBase64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(attachedFile);
+        });
+      } catch (err) {
+        console.warn('Failed to encode image to base64', err);
+      }
+    }
+
     try {
       const controller = new AbortController();
-      // The MCQ brain runs one BART pass per passage on CPU (~10-17s each), so a
-      // 10-question request needs well over the old 120s budget.
       const timeoutMs = 240000;
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
       const res = await fetch(`${API_URL}/documents/${doc.id}/ai-command`, {
@@ -1251,6 +1297,9 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         body: JSON.stringify({
           command: prompt,
           has_image_upload: !!attachedFile,
+          image_base64: imageBase64,
+          selection: activeSelection,
+          history: commandHistory.slice(-8),
         }),
         signal: controller.signal
       }).finally(() => clearTimeout(timeoutId));
@@ -1262,6 +1311,13 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         throw new Error(data.detail || 'AI command failed');
       }
 
+      // Record in conversation history for reference resolution
+      setCommandHistory((prev) => [
+        ...prev,
+        { role: 'user', command: prompt },
+        { role: 'assistant', action: data.action, result: data.message || '' },
+      ]);
+
       if (data.action === 'image_module') {
         setShowImageModule(true);
         if (data.images) {
@@ -1269,9 +1325,6 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         }
         setAiResult(data.message || `Detected ${data.count || 0} image(s).`);
       } else if (data.action === 'replace_image') {
-        // Nothing is written here. The backend resolved which image the phrase
-        // names; if it was unambiguous we go straight to the upload, otherwise
-        // the candidate list becomes a picker.
         if (data.status === 'resolved' && attachedFile) {
           await uploadPromptReplacement(data.indexes[0], attachedFile, prompt);
         } else if (data.status === 'ambiguous' && attachedFile) {
@@ -1286,6 +1339,23 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         } else {
           setAiResult(data.message || 'Tell me which image to replace.');
         }
+      } else if (data.action === 'image_replaced') {
+        setAiResult(data.message || 'Done — replaced image.');
+        clearPromptImage();
+        setViewMode('full');
+        await fetchContent();
+        await fetchImageInventory();
+        await refreshDoc();
+        refreshFullPreview();
+      } else if (data.action === 'replace_applied') {
+        if (data.changes) {
+          setAiChanges(data.changes);
+        }
+        setAiResult(data.message || `Done — replaced ${data.matches_replaced || 0} occurrence(s).`);
+        setViewMode('full');
+        await fetchContent();
+        await refreshDoc();
+        refreshFullPreview();
       } else if (data.action === 'replace') {
         if (data.total_matches === 0) {
           setAiResult(`I searched for "${data.find_text}" but found no matches.`);
@@ -1307,8 +1377,33 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         await fetchContent();
         await fetchHeaderFooter();
         await refreshDoc();
-        // Preview refresh is best-effort and must never block the AI bar.
         refreshFullPreview();
+      } else if (data.action === 'style_headings' || data.action === 'style_document') {
+        setAiResult(data.message || 'Done — applied formatting.');
+        setViewMode('full');
+        await fetchContent();
+        await refreshDoc();
+        refreshFullPreview();
+      } else if (data.action === 'delete_column' || data.action === 'delete_row' || data.action === 'delete_table') {
+        setAiResult(data.message || 'Done — updated table.');
+        setViewMode('full');
+        await fetchContent();
+        await refreshDoc();
+        refreshFullPreview();
+      } else if (data.action === 'delete_image') {
+        setAiResult(data.message || 'Done — removed image(s).');
+        setViewMode('full');
+        await fetchContent();
+        await fetchImageInventory();
+        await refreshDoc();
+        refreshFullPreview();
+      } else if (data.action === 'describe_image') {
+        setAiSummary({
+          summary: `# Image Analysis\n\n${data.description || data.message}`,
+          source: 'image',
+          engine: data.engine || 'gemini_vision',
+        });
+        setAiResult(data.description ? data.description.slice(0, 140) + '...' : data.message);
       } else if (data.action === 'summarize') {
         setAiSummary(data);
         setAiResult(
@@ -1321,8 +1416,6 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         setQuizPicks({});
         setQuizMode(false);
         const got = (data.questions || []).length;
-        // Fall back rather than printing "from undefined" if a response ever
-        // arrives without its source label.
         const from = data.source ? ` from ${data.source}` : '';
         setAiResult(
           got === 0
@@ -1336,17 +1429,44 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         if (data.rewritten_text) {
           setAiSummary({
             summary: `# Rewritten Text\n\n${data.rewritten_text}`,
-            source: 'document',
+            source: data.source || 'document',
             engine: data.engine || 'local',
           });
+        }
+      } else if (data.action === 'qa_extract') {
+        setAiSummary({
+          summary: `# Document Analysis & Notes\n\n${data.answer || data.message}`,
+          source: 'document',
+          engine: data.engine || 'gemini',
+        });
+        setAiResult(data.message ? (data.message.length > 120 ? data.message.slice(0, 120) + '...' : data.message) : 'Done.');
+      } else if (data.action === 'composite') {
+        setAiResult(data.message || 'Done — processed all operations.');
+        setViewMode('full');
+        await fetchContent();
+        await refreshDoc();
+        refreshFullPreview();
+        if (data.summary) {
+          setAiSummary({
+            summary: data.summary,
+            source: 'document',
+            engine: 'universal',
+          });
+        }
+        if (data.questions) {
+          setAiQuestions({
+            questions: data.questions,
+            requested: data.questions.length,
+            engine: 'universal',
+          });
+          setQuizPicks({});
+          setQuizMode(false);
         }
       } else {
         setAiResult(data.message || 'I scanned your document. Try e.g. \'Change print to not print\' or \'Change the header to RapidDoc Report\'.');
       }
     } catch (err) {
       setAiResult(`Error: ${err.message}`);
-      // Put the question back so a failed request (offline, 500, timeout) does
-      // not cost the user their typing. An abort is intentional, not a failure.
       if (err?.name !== 'AbortError') {
         setAiPrompt((current) => (current.trim() ? current : prompt));
       }
@@ -2698,11 +2818,25 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           )}
 
           {aiChanges.length > 0 && (
-            <div className="mb-2 flex flex-col gap-2 max-h-40 overflow-y-auto rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3">
-              <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                Changes applied (highlighted in the document above)
-              </span>
+            <div className="mb-2 flex flex-col gap-2 max-h-40 overflow-y-auto rounded-2xl border border-emerald-200 bg-emerald-50/60 p-3 transition-all duration-300 animate-in fade-in slide-in-from-bottom-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  Changes applied (highlighted in the document above)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiChanges([]);
+                    setAiResult((prev) => (prev && !prev.startsWith('Error') ? '' : prev));
+                  }}
+                  className="text-slate-400 hover:text-slate-600 p-0.5 rounded-md hover:bg-emerald-100/60 transition cursor-pointer"
+                  title="Dismiss"
+                  aria-label="Dismiss changes notification"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
               {aiChanges.map((c, idx) => (
                 <div key={idx} className="text-[11px] text-slate-600 bg-white border border-emerald-100 rounded-lg px-2.5 py-1.5 flex items-start gap-2">
                   <span className="font-bold text-emerald-700 shrink-0">{c.paragraph}:</span>
@@ -3089,11 +3223,27 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                 /quiz
               </button>
             </div>
-            {promptImage && (
-              <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
-                📋 Pasted Picture Ready
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              {activeSelection && (
+                <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] bg-indigo-50 border border-indigo-200 text-indigo-700 shadow-xs animate-in fade-in">
+                  <span className="font-bold">Selection:</span>
+                  <span className="truncate max-w-[220px] italic">"{activeSelection.text}"</span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSelection(null)}
+                    className="p-0.5 hover:bg-indigo-200/50 rounded-full text-indigo-500 transition"
+                    title="Clear active selection"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+              {promptImage && (
+                <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">
+                  📋 Pasted Picture Ready
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="relative rounded-2xl border border-slate-200 bg-slate-50 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 transition shadow-sm">
@@ -3117,8 +3267,10 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
               onPaste={handleCommandPaste}
               placeholder={
                 promptImage
-                  ? 'Type "replace the image 1 by this" or click an image above to replace'
-                  : 'Ask RapidDoc AI... type /image to inspect images, paste an image to replace, e.g. "replace the image 1 by this"'
+                  ? 'Type e.g. "Replace the logo with this", "Use this as header image", or "Replace image 1"'
+                  : activeSelection
+                    ? `Command for selection: e.g. "Make this more professional", "Make this shorter", "Change heading to blue"`
+                    : 'Universal Command Bar: "Change headings to blue", "Delete column 2", "Summarize in 5 points", "Replace X with Y"...'
               }
               disabled={aiProcessing}
               className="w-full bg-transparent py-3 pl-4 pr-24 outline-none text-sm text-slate-700 disabled:opacity-50 placeholder:text-slate-400"

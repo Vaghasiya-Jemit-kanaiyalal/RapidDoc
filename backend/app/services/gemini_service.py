@@ -99,7 +99,7 @@ FALLBACK_MCQ_RE = re.compile(
     re.IGNORECASE,
 )
 FALLBACK_REWRITE_RE = re.compile(
-    r"\b(?:rewrite|rephrase|paraphrase|proofread|correct|fix\s+grammar|improve\s+writing|make\s+it\s+(?:formal|casual|concise|professional|clearer)|shorten|expand)\b",
+    r"\b(?:rewrite|rephrase|paraphrase|proofread|correct|fix\s+grammar|improve\s+writing|make\s+(?:it|this|that)?\s*(?:more\s+)?(?:formal|casual|concise|professional|clearer|shorter|better)|shorten|expand|make\s+(?:it|this)\s+(?:shorter|longer))\b",
     re.IGNORECASE,
 )
 _COUNT_RE = re.compile(r"\b(\d+)\b")
@@ -114,13 +114,65 @@ FALLBACK_REPLACE_IMAGE_RE = re.compile(
 _STRIP_CHARS = " \t\r\n'\"“”`"
 
 
-def _clean_find_text(value: str) -> str:
-    """Drop filler words and syntax markers that accidentally get captured as the find text.
+COLOR_NAME_TO_RGB = {
+    "dark blue": (0, 32, 96),
+    "navy": (0, 0, 128),
+    "blue": (0, 102, 204),
+    "royal blue": (65, 105, 225),
+    "light blue": (173, 216, 230),
+    "red": (192, 0, 0),
+    "dark red": (128, 0, 0),
+    "crimson": (220, 20, 60),
+    "green": (0, 128, 0),
+    "dark green": (0, 80, 0),
+    "emerald": (46, 139, 87),
+    "black": (0, 0, 0),
+    "gray": (128, 128, 128),
+    "grey": (128, 128, 128),
+    "dark gray": (64, 64, 64),
+    "purple": (112, 48, 160),
+    "orange": (237, 125, 49),
+    "teal": (0, 128, 128),
+    "gold": (218, 165, 32),
+}
 
-    e.g. "Replace the word Program with Project" -> find_text is "Program".
-    "replace all apple with orange" -> find_text is "apple".
-    "change from apple to orange" -> find_text is "apple".
+_ORDINALS_MAP = {
+    "first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2, "3rd": 2,
+    "fourth": 3, "4th": 3, "fifth": 4, "5th": 4, "sixth": 5, "6th": 5,
+    "seventh": 6, "7th": 6, "eighth": 7, "8th": 7, "ninth": 8, "9th": 8, "tenth": 9, "10th": 9,
+    "last": -1, "final": -1,
+}
+
+UNIVERSAL_ACTIONS = {
+    "replace", "header", "footer", "replace_image", "image_module",
+    "style_headings", "style_document", "delete_column", "delete_row", "delete_table",
+    "delete_image", "resize_image", "describe_image", "add_caption",
+    "summarize", "generate_mcq", "rewrite", "qa_extract", "composite"
+}
+
+
+def _extract_exact_replacement(prompt: str) -> dict | None:
+    """Exact quoted direct replacement extractor.
+    Guarantees 100% exact character preservation: no paraphrasing,
+    no punctuation dropping, no case alteration.
+    e.g. Replace 'ABC Corporation' with 'ABC Corp.' -> find: 'ABC Corporation', repl: 'ABC Corp.'
     """
+    p = prompt.strip()
+    quotes = re.findall(r'''['"“”`]([^'"“”`]+)['"“”`]''', p)
+    if len(quotes) >= 2 and re.search(r"\b(?:replace|repalce|relpace|change|swap|substitute|switch|find)\b", p, re.I):
+        replace_all = bool(re.search(r"\b(?:all|every|each)\b", p, re.I))
+        return {
+            "action": "replace",
+            "find_text": quotes[0],
+            "replace_text": quotes[1],
+            "replace_all": replace_all,
+            "engine": "exact_quoted_rule",
+        }
+    return None
+
+
+def _clean_find_text(value: str) -> str:
+    """Drop filler words and syntax markers that accidentally get captured as the find text."""
     if not value:
         return ""
     v = value.strip(_STRIP_CHARS)
@@ -134,16 +186,11 @@ def _clean_find_text(value: str) -> str:
         v,
         flags=re.I,
     )
-    v = v.strip(_STRIP_CHARS)
-    return v.rstrip(" ,;:.").strip()
+    return v.strip(_STRIP_CHARS)
 
 
 def _clean_replace_text(value: str) -> str:
-    """Drop filler words and trailing document scopes that get captured as replace text.
-
-    e.g. "replace cat with dog in document" -> replace_text is "dog".
-    "replace cat with dog across the document" -> replace_text is "dog".
-    """
+    """Drop filler words and trailing document scopes that get captured as replace text."""
     if not value:
         return ""
     v = value.strip(_STRIP_CHARS)
@@ -159,11 +206,146 @@ def _clean_replace_text(value: str) -> str:
         v,
         flags=re.I,
     )
-    v = v.strip(_STRIP_CHARS)
-    return v.rstrip(" ,;:.").strip()
+    return v.strip(_STRIP_CHARS)
 
 
-def _fallback_intent(prompt: str, has_image_upload: bool = False) -> dict:
+def _fallback_table_action(prompt: str) -> dict | None:
+    p = prompt.strip()
+    # 1. Delete/remove column
+    m_col = re.search(r"\b(?:delete|remove|drop)\s+(?:the\s+)?(\d+|first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th|last)\s+col(?:umn)?(?:\s+(?:from|in)\s+(?:all\s+tables|every\s+table|(?:the\s+)?(\d+|first|1st|second|2nd|third|3rd)\s+table|table\s+(\d+)))?\b", p, re.I)
+    if m_col:
+        raw_idx = m_col.group(1).lower()
+        col_idx = _ORDINALS_MAP.get(raw_idx)
+        if col_idx is None:
+            col_idx = int(raw_idx) - 1 if raw_idx.isdigit() else 0
+        tbl_match = m_col.group(2) or m_col.group(3)
+        if tbl_match:
+            tbl_idx = _ORDINALS_MAP.get(tbl_match.lower())
+            if tbl_idx is None:
+                tbl_idx = int(tbl_match) - 1 if tbl_match.isdigit() else 0
+        else:
+            tbl_idx = "all"
+        return {
+            "action": "delete_column",
+            "column_index": col_idx,
+            "col_index": col_idx,
+            "table_index": tbl_idx,
+            "engine": "rule",
+        }
+
+    # 2. Delete/remove row
+    m_row = re.search(r"\b(?:delete|remove|drop)\s+(?:the\s+)?(\d+|first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|last)\s+row(?:\s+(?:from|in)\s+(?:all\s+tables|every\s+table|(?:the\s+)?(\d+|first|1st|second|2nd|third|3rd)\s+table|table\s+(\d+)))?\b", p, re.I)
+    if m_row:
+        raw_idx = m_row.group(1).lower()
+        row_idx = _ORDINALS_MAP.get(raw_idx)
+        if row_idx is None:
+            row_idx = int(raw_idx) - 1 if raw_idx.isdigit() else 0
+        tbl_match = m_row.group(2) or m_row.group(3)
+        if tbl_match:
+            tbl_idx = _ORDINALS_MAP.get(tbl_match.lower())
+            if tbl_idx is None:
+                tbl_idx = int(tbl_match) - 1 if tbl_match.isdigit() else 0
+        else:
+            tbl_idx = "all"
+        return {
+            "action": "delete_row",
+            "row_index": row_idx,
+            "table_index": tbl_idx,
+            "engine": "rule",
+        }
+
+    # 3. Delete table
+    m_tbl = re.search(r"\b(?:delete|remove|drop)\s+(?:all\s+)?tables?(?:\s+(\d+))?\b", p, re.I)
+    if m_tbl:
+        tbl_idx = int(m_tbl.group(1)) - 1 if m_tbl.group(1) else "all"
+        return {
+            "action": "delete_table",
+            "table_index": tbl_idx,
+            "engine": "rule",
+        }
+    return None
+
+
+def _fallback_heading_action(prompt: str) -> dict | None:
+    p = prompt.strip()
+    if re.search(r"\bheadings?\b", p, re.I) and re.search(r"\b(?:change|make|set|style|format|update)\b", p, re.I):
+        color = None
+        color_rgb = None
+        for cname, rgb in COLOR_NAME_TO_RGB.items():
+            if re.search(rf"\b{re.escape(cname)}\b", p, re.I):
+                color = cname
+                color_rgb = rgb
+                break
+        
+        bold = True if re.search(r"\bbold\b", p, re.I) else None
+        italic = True if re.search(r"\bitalic\b", p, re.I) else None
+        
+        size = None
+        m_size = re.search(r"\b(\d+)\s*(?:px|pt)\b", p, re.I)
+        if m_size:
+            size = float(m_size.group(1))
+            
+        font_name = None
+        for fn in ("Arial", "Times New Roman", "Calibri", "Courier New", "Georgia", "Inter", "Verdana"):
+            if re.search(rf"\b{re.escape(fn)}\b", p, re.I):
+                font_name = fn
+                break
+                
+        return {
+            "action": "style_headings",
+            "color": color,
+            "color_rgb": color_rgb,
+            "bold": bold,
+            "italic": italic,
+            "font_size": size,
+            "font_name": font_name,
+            "engine": "rule",
+        }
+    return None
+
+
+def _fallback_image_action(prompt: str, has_image_upload: bool = False) -> dict | None:
+    p = prompt.strip()
+    if re.search(r"\b(?:delete|remove|clear)\s+(?:all\s+)?(?:images?|pictures?|photos?)\b", p, re.I):
+        return {"action": "delete_image", "image_index": "all", "image_indexes": None, "engine": "rule"}
+    if re.search(r"\b(?:describe|explain|what\s+is\s+in|read)\s+(?:this\s+)?(?:image|picture|photo|diagram|chart)\b", p, re.I):
+        return {"action": "describe_image", "query": p, "engine": "rule"}
+    return None
+
+
+def _fallback_qa_action(prompt: str) -> dict | None:
+    p = prompt.strip()
+    if re.search(r"\b(?:what\s+is\s+this\s+document\s+about|tell\s+me\s+what\s+this\s+document\s+is\s+about|find\s+(?:the\s+)?important\s+points|create\s+study\s+notes|key\s+takeaways?|main\s+points?|compare\s+(?:these|the)\s+two\s+sections)\b", p, re.I):
+        return {"action": "qa_extract", "query": p, "engine": "rule"}
+    return None
+
+
+def _fallback_intent(prompt: str, has_image_upload: bool = False, selection: dict = None) -> dict:
+    # 0. Direct exact replacement
+    exact_repl = _extract_exact_replacement(prompt)
+    if exact_repl:
+        return exact_repl
+
+    # Table manipulation
+    table_act = _fallback_table_action(prompt)
+    if table_act:
+        return table_act
+
+    # Heading styling
+    heading_act = _fallback_heading_action(prompt)
+    if heading_act:
+        return heading_act
+
+    # Image actions
+    img_act = _fallback_image_action(prompt, has_image_upload)
+    if img_act:
+        return img_act
+
+    # QA / Key points
+    qa_act = _fallback_qa_action(prompt)
+    if qa_act:
+        return qa_act
+
     m = FALLBACK_HEADER_RE.search(prompt)
     if m:
         val = m.group(1) or m.group(2)
@@ -219,40 +401,71 @@ def _fallback_intent(prompt: str, has_image_upload: bool = False) -> dict:
                 (key for key, _ in SUMMARY_LENGTH_HINTS if key in prompt.lower()), None
             ),
         }
-    if FALLBACK_REWRITE_RE.search(prompt) or GRAMMAR_INTENT_RE.search(prompt):
+    if FALLBACK_REWRITE_RE.search(prompt) or GRAMMAR_INTENT_RE.search(prompt) or (selection and selection.get("text") and re.search(r"\b(?:make|turn|change|convert|transform|improve|shorten|expand|translate|rewrite)\b", prompt, re.I)):
         return {
             "action": "rewrite",
             "instruction": prompt.strip(),
-            "scope": "document",
+            "scope": "selection" if (selection and selection.get("text")) else "document",
+            "source_text": selection.get("text") if selection else None,
         }
     return {"action": "unknown"}
 
 
 # ---------------------------------------------------------------------------
-# Gemini layer
+# Gemini Universal Orchestrator Layer
 # ---------------------------------------------------------------------------
-INTENT_PROMPT = """You are the command understanding engine for RapidDoc, a document editing app.
+UNIVERSAL_INTENT_PROMPT = """You are the Universal Command Engine for RapidDoc, an AI document editing platform.
+Analyze the user's natural language command, conversational context, and active document selection. Return strictly valid JSON only.
 
-A user typed a natural-language instruction about editing their document. Parse it and return JSON only.
+Supported Universal Actions:
 
-Supported actions:
-1. "replace" — replace an exact piece of text with another text anywhere in the document.
-   Example: "Change print to not print" -> {"action": "replace", "find_text": "print", "replace_text": "not print"}
-2. "header" — change ONLY the page header. Example: "Change the header to RapidDoc Report" -> {"action": "header", "new_text": "RapidDoc Report"}
-3. "footer" — change ONLY the page footer. Example: "Change the footer to CHARUSAT University" -> {"action": "footer", "new_text": "CHARUSAT University"}
-4. "replace_image" — the user wants to swap an embedded picture for a newly uploaded file.
-   Example: "Replace the image on page 2 with this" -> {"action": "replace_image"}
-   Example: "Change the logo" (an image is attached) -> {"action": "replace_image"}
+1. Direct text replacement:
+   {"action": "replace", "find_text": "...", "replace_text": "..."}
+   CRITICAL: Extract find_text and replace_text EXACTLY character-for-character. Do NOT paraphrase, do NOT alter capitalization, do NOT remove punctuation.
+
+2. Header and Footer:
+   {"action": "header", "new_text": "..."}
+   {"action": "footer", "new_text": "..."}
+
+3. Heading styling:
+   {"action": "style_headings", "font_size": 20, "bold": true, "italic": false, "color": "dark blue", "font_name": "Calibri", "level": null}
+   (Only include fields mentioned or implied; e.g. "make headings bold" -> {"action": "style_headings", "bold": true})
+
+4. Document styling:
+   {"action": "style_document", "font_name": "Times New Roman", "font_size": 12}
+
+5. Table manipulation:
+   {"action": "delete_column", "col_index": 1, "table_index": null}  # 0-based col_index: 0=1st, 1=2nd, 2=3rd, -1=last column. table_index=null means all tables.
+   {"action": "delete_row", "row_index": 0, "table_index": null}     # 0-based row_index: 0=1st, -1=last row.
+   {"action": "delete_table", "table_index": null}                   # table_index=null means all tables.
+
+6. Image operations:
+   {"action": "replace_image"}
+   {"action": "delete_image", "image_indexes": null}                 # null means all images.
+   {"action": "resize_image", "width": 3.0, "unit": "in", "image_index": 0}
+   {"action": "describe_image", "query": "..."}
+
+7. Document comprehension & generative:
+   {"action": "summarize", "scope": "document"|"page", "length": "5 points"|"brief"|"detailed", "page": null}
+   {"action": "generate_mcq", "num_questions": 10, "topic": null}
+   {"action": "rewrite", "instruction": "...", "scope": "selection"|"paragraph"|"document"}
+   {"action": "qa_extract", "query": "..."}  # for "What is this about?", "Find important points", "Create study notes"
+
+8. Mixed / Composite Multi-Step Commands:
+   If the user asks for multiple distinct operations in one instruction (e.g. "Replace X with Y, make headings bold, and summarize in 5 points"):
+   {"action": "composite", "actions": [
+       {"action": "replace", "find_text": "...", "replace_text": "..."},
+       {"action": "style_headings", "bold": true},
+       {"action": "summarize", "length": "5 points"}
+   ]}
 
 Rules:
-- For "replace", extract the exact literal substring to find and the exact replacement. Do not paraphrase.
-- If the instruction references a header/footer, return action "header" or "footer" and put the desired new text in "new_text". Never treat it as a body replace.
-- Use "replace_image" ONLY when the user is asking to change a picture. If an image file is attached to the message, that alone is enough signal.
-- Do NOT extract an image index, page number, or filename for "replace_image". The target is resolved separately against the document's actual image list, and a number you invent could silently replace the wrong picture. Return just {"action": "replace_image"}.
-- Distinguish carefully: "replace the image on page 2" is replace_image; "replace the word print with don't print" is a text replace.
-- If you cannot determine an action, return {"action": "unknown"}.
+- Resolve references ("this", "it", "that", "the previous section") using the conversation history and current selection.
+- If selected text is present and user says "make this professional", set action="rewrite" and target="selection".
+- Strictly valid JSON only, no markdown formatting fences.
+"""
+INTENT_PROMPT = UNIVERSAL_INTENT_PROMPT
 
-Return strictly valid JSON with no markdown fences."""
 
 REWRITE_PROMPT = """You are the text rewriting engine for RapidDoc, a document editing app.
 Rewrite the given text following the user's instruction. Keep the meaning identical.
@@ -313,32 +526,47 @@ def _gemini_client():
         return None
 
 
-def _understand_with_gemini(prompt: str, has_image_upload: bool = False):
+def _understand_with_gemini(
+    prompt: str,
+    has_image_upload: bool = False,
+    history: list = None,
+    selection: dict = None,
+    image_base64: str = None,
+):
     model = _gemini_client()
     if model is None:
         return None
     try:
-        hint = (
-            "\n\nNote: the user has attached an image file with this instruction."
-            if has_image_upload
-            else ""
-        )
+        context_parts = []
+        if has_image_upload or image_base64:
+            context_parts.append("Note: The user has attached or pasted an image with this command.")
+        if selection:
+            context_parts.append(f"Active User Selection: {json.dumps(selection)}")
+        if history:
+            recent_turns = history[-5:]
+            context_parts.append(f"Recent Conversation History (for resolving references like 'it', 'this', 'that'): {json.dumps(recent_turns)}")
+
+        context_str = ("\n\nContext:\n" + "\n".join(context_parts)) if context_parts else ""
+        full_prompt = f"{UNIVERSAL_INTENT_PROMPT}{context_str}\n\nUser command: {prompt}"
+
         m = model.generate_content(
-            f"{INTENT_PROMPT}{hint}\n\nUser instruction: {prompt}",
+            full_prompt,
             generation_config={
                 "response_mime_type": "application/json",
                 "temperature": 0.0,
             },
         )
         intent = _parse_intent_from_json(m.text)
-        if intent.get("action") in ("replace", "header", "footer", "replace_image"):
+        action = intent.get("action")
+        if action in UNIVERSAL_ACTIONS or action == "composite":
             logger.info("Gemini parsed command '%s' as %s", prompt, intent)
             intent["engine"] = "gemini"
             return intent
         logger.warning("Gemini returned unexpected intent for '%s': %s", prompt, intent)
     except Exception as exc:
-        logger.error("Gemini command understanding failed, falling back to regex: %s", exc)
+        logger.error("Gemini command understanding failed, falling back to rules: %s", exc)
     return None
+
 
 
 def _rewrite_with_gemini(instruction: str, text: str):
@@ -452,71 +680,100 @@ def _local_intent_to_response(prompt: str, intent: str) -> dict:
     return None
 
 
-def understand_command(prompt: str, has_image_upload: bool = False) -> dict:
-    """Understand a natural-language command.
+def understand_command(
+    prompt: str,
+    has_image_upload: bool = False,
+    history: list = None,
+    selection: dict = None,
+    image_base64: str = None,
+) -> dict:
+    """Understand any natural-language command using the Universal Command Engine.
 
-    Tries the local DistilBERT intent brain first, then Gemini, then the
-    regex rule engine. Returns a dict with the action schema.
-
-    ``has_image_upload`` tells the cascade that the user attached a picture.
-    An image swap is only meaningful with a file to swap in, so this flag is
-    what lets the regex tier recognise the intent - the local DistilBERT label
-    set has no image class, and Gemini is not guaranteed to be configured.
-    Without it, "replace the image" falls through to the text-replace tier,
-    which searches the document body for the literal phrase "the image".
+    Execution priority:
+    1. Exact direct replacement (100% deterministic character-for-character preservation).
+    2. Local intent classifier brain.
+    3. Rule engine (table, heading, header/footer, image, MCQ, summary).
+    4. Gemini Universal Orchestrator with context & multi-action planning.
     """
     prompt = (prompt or "").strip()
     if not prompt:
         return {"action": "unknown"}
 
+    # 1. Exact quoted replacement takes absolute top priority for direct commands
+    exact_repl = _extract_exact_replacement(prompt)
+    if exact_repl:
+        logger.info("Exact quoted direct replacement intercepted: %s -> %s", exact_repl["find_text"], exact_repl["replace_text"])
+        return exact_repl
+
     if re.match(r"^/?images?\b", prompt.strip(), re.I) or re.search(r"\b(?:list|show|detect|inspect|view)\s+(?:all\s+)?images\b", prompt, re.I):
         return {"action": "image_module", "engine": "rule"}
 
-    # An attached image plus any image-ish wording is unambiguous, so answer it
-    # from the rules without consulting the local brain: it has no image class
-    # and would otherwise steer the request toward a text replace.
+    # 2. Attached image replacement wording
     if has_image_upload and (FALLBACK_REPLACE_IMAGE_RE.search(prompt) or re.search(r"\b(?:repl[a-z]*|swap|put|change)\b.*?\b\d+\b", prompt, re.I)):
         logger.info("Image upload + image wording '%s' -> replace_image (regex)", prompt)
         return {"action": "replace_image", "engine": "regex"}
 
-    # 1) Local fine-tuned intent brain -------------------------------------
+    # 3. Local fine-tuned intent brain (if available)
     local = classify_intent(prompt)
     threshold = intent_confidence_threshold()
     if local and local.get("confidence", 0.0) >= threshold:
         response = _local_intent_to_response(prompt, local["intent"])
         if response:
             response["confidence"] = round(local["confidence"], 4)
-            logger.info(
-                "Local intent brain: '%s' -> %s (conf=%.3f)",
-                prompt, response["action"], local["confidence"],
-            )
             return response
-        logger.info(
-            "Local intent brain classified '%s' as '%s' (conf=%.3f) but "
-            "slots were unsupported/incomplete; falling back.",
-            prompt, local["intent"], local.get("confidence", 0.0),
-        )
-    elif local is not None:
-        logger.info(
-            "Local intent brain confidence %.3f below threshold %.2f for "
-            "'%s'; falling back.",
-            local.get("confidence", 0.0), threshold, prompt,
-        )
 
-    # 2) High-precision rule engine (instant, deterministic, offline) --------
-    rule_intent = _fallback_intent(prompt, has_image_upload)
+    # 4. Universal Gemini Orchestrator (handles multi-action, context, coreference)
+    gemini_intent = _understand_with_gemini(
+        prompt, has_image_upload=has_image_upload, history=history, selection=selection, image_base64=image_base64
+    )
+    if gemini_intent and gemini_intent.get("action") != "unknown":
+        return gemini_intent
+
+    # 5. High-precision rule engine fallback
+    rule_intent = _fallback_intent(prompt, has_image_upload, selection=selection)
     if rule_intent.get("action") != "unknown":
         rule_intent.setdefault("engine", "regex")
-        logger.info("Rule engine resolved command '%s' -> %s", prompt, rule_intent["action"])
         return rule_intent
-
-    # 3) Gemini fallback ----------------------------------------------------
-    gemini_intent = _understand_with_gemini(prompt, has_image_upload)
-    if gemini_intent:
-        return gemini_intent
 
     rule_intent.setdefault("engine", "regex")
     return rule_intent
+
+
+def describe_image_with_gemini(image_bytes: bytes, prompt: str = "Describe this image in detail and transcribe any text:") -> str:
+    """Analyze, explain, or OCR text from an image using Gemini vision."""
+    model = _gemini_client()
+    if model is None:
+        return "Image description engine unavailable (Gemini API key not configured)."
+    try:
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes))
+        resp = model.generate_content([f"{prompt}\nIf this image contains diagrams, charts, tables or text, explain and transcribe them.", img])
+        return (resp.text or "").strip() or "No description could be generated."
+    except Exception as exc:
+        logger.error("Error in describe_image_with_gemini: %s", exc)
+        return f"Unable to analyze image: {str(exc)}"
+
+
+def answer_or_extract_with_gemini(text: str, query: str) -> str:
+    """Answer questions, extract key points, or generate study notes from document text."""
+    model = _gemini_client()
+    if model is None:
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        return "\n".join(f"• {l}" for l in lines[:5])
+    try:
+        prompt = (
+            f"You are the Document Intelligence Engine for RapidDoc.\n"
+            f"Based on the following document text, answer the user's request accurately, clearly, and concisely.\n\n"
+            f"User request: {query}\n\n"
+            f"Document text:\n{text[:12000]}\n"
+        )
+        resp = model.generate_content(prompt)
+        return (resp.text or "").strip() or "No information found."
+    except Exception as exc:
+        logger.error("Error in answer_or_extract_with_gemini: %s", exc)
+        return f"Unable to analyze document: {str(exc)}"
+
 
 
 def rewrite_text(instruction: str, text: str) -> dict:

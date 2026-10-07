@@ -71,14 +71,27 @@ class FindReplaceRequest(BaseModel):
     replace_text: str
     case_sensitive: Optional[bool] = True
 
+class SelectionContext(BaseModel):
+    type: Optional[str] = None  # "text", "paragraph", "table", "image", "header", "footer"
+    text: Optional[str] = None
+    paragraph_index: Optional[int] = None
+    table_index: Optional[int] = None
+    row_index: Optional[int] = None
+    col_index: Optional[int] = None
+    image_index: Optional[int] = None
+
 class AICommandRequest(BaseModel):
     command: str
     # Explicit passage to act on; skips document parsing when provided.
     text: Optional[str] = None
-    # True when the client sent this command alongside an attached image. Tells
-    # the intent cascade that a picture is available to swap in, so "replace the
-    # logo" resolves to replace_image instead of a text replace of "the logo".
+    # True when the client sent this command alongside an attached image.
     has_image_upload: Optional[bool] = False
+    # Conversation history of recent commands and actions for context awareness
+    history: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    # Current user selection in the editor (text, table, image, paragraph)
+    selection: Optional[Dict[str, Any]] = None
+    # Pasted/attached image data for multimodal vision commands
+    image_base64: Optional[str] = None
 
 
 class ImageResizeItem(BaseModel):

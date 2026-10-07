@@ -17,10 +17,12 @@ from fastapi.routing import APIRoute
 from RapidDoc.backend.app.database import db_conn
 from RapidDoc.backend.app.routers.auth import get_current_user
 from RapidDoc.backend.app.services.storage import storage_service
+import base64
 from RapidDoc.backend.app.services.docx_editor import (
     apply_docx_styling, get_docx_images_count, get_docx_content, update_docx_content, find_replace_docx,
     find_text_variants, selective_replace_docx, iter_docx_body_items, get_docx_image_parts,
-    get_docx_document_view, replace_docx_images, resize_docx_images
+    get_docx_document_view, replace_docx_images, resize_docx_images,
+    delete_docx_table_column, delete_docx_table_row, delete_docx_table, style_docx_headings, delete_docx_images
 )
 from RapidDoc.backend.app.services.pdf_editor import (
     apply_pdf_styling, get_pdf_images_count, get_pdf_content, update_pdf_content, find_replace_pdf,
@@ -33,7 +35,8 @@ from RapidDoc.backend.app.services.image_resolver import (
     _public_inventory,
 )
 from RapidDoc.backend.app.services.gemini_service import (
-    generate_mcqs, summarize_document, understand_command, rewrite_text
+    generate_mcqs, summarize_document, understand_command, rewrite_text,
+    describe_image_with_gemini, answer_or_extract_with_gemini
 )
 from RapidDoc.backend.app.services.export_service import (
     build_docx_bytes_with_status, build_pdf_bytes,
@@ -1692,14 +1695,9 @@ async def ai_command_endpoint(
     request: AICommandRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Understand a natural-language command via Gemini, then act on the document.
-
-    For 'replace': returns variant groups for the user to select which to change.
-    For 'header'/'footer': applies the change directly (only header/footer) and
-    returns change info for highlighting.
-    For 'replace_image': resolves which image the phrase names and returns it,
-    so the client can upload the new file against a confirmed target. Nothing is
-    written here - this endpoint never mutates the document for an image swap.
+    """Universal Natural-Language Interface for RapidDoc.
+    Understands user intent, resolves context/selection/history, and executes
+    the appropriate document operation or AI service.
     """
     try:
         db = db_conn.get_db()
@@ -1708,16 +1706,62 @@ async def ai_command_endpoint(
             raise HTTPException(status_code=404, detail="Document not found")
         
         file_path = storage_service.get_file_path(doc["storage_path"])
+
+        history_list = []
+        if request.history:
+            for h in request.history:
+                history_list.append(h.dict() if hasattr(h, "dict") else dict(h))
+
+        selection_dict = None
+        if request.selection:
+            selection_dict = request.selection.dict() if hasattr(request.selection, "dict") else dict(request.selection)
+
         intent = await run_in_threadpool(
-            understand_command, request.command, bool(request.has_image_upload)
+            understand_command,
+            request.command,
+            bool(request.has_image_upload or request.image_base64),
+            history_list,
+            selection_dict,
+            request.image_base64,
         )
         action = intent.get("action")
 
         if action == "replace":
-            find_text = (intent.get("find_text") or "").strip()
-            replace_text = (intent.get("replace_text") or "").strip()
+            find_text = intent.get("find_text") or ""
+            replace_text = intent.get("replace_text") or ""
             if not find_text:
                 return {"status": "success", "action": "unknown", "engine": intent.get("engine"), "message": "I couldn't tell what text to find."}
+
+            replace_all = intent.get("replace_all", False) or intent.get("direct_apply", False) or intent.get("engine") == "exact_quote"
+            if replace_all:
+                active_path, version_fields = ensure_edited_version(doc, db, action=f"Replace: '{find_text}' -> '{replace_text}'")
+                matches_replaced = 0
+                if doc["file_type"] == "docx":
+                    matches_replaced = await run_in_threadpool(
+                        find_replace_docx, active_path, active_path, find_text, replace_text, False
+                    )
+                else:
+                    matches_replaced = await run_in_threadpool(
+                        find_replace_pdf, active_path, active_path, find_text, replace_text, False
+                    )
+                current_date = datetime.now().strftime("%Y-%m-%d")
+                db.documents.update_one(
+                    {"_id": ObjectId(doc_id)},
+                    {"$push": {"edit_history": {"date": current_date, "action": f"Replaced '{find_text}' with '{replace_text}' ({matches_replaced} matches)"}},
+                     "$set": version_fields}
+                )
+                return {
+                    "status": "success",
+                    "action": "replace_applied",
+                    "intent": intent.get("intent"),
+                    "engine": intent.get("engine"),
+                    "find_text": find_text,
+                    "replace_text": replace_text,
+                    "matches_replaced": matches_replaced,
+                    "message": f"Done — replaced {matches_replaced} occurrence{'s' if matches_replaced != 1 else ''}.",
+                    "changes": [{"paragraph": "Text", "old_text": find_text, "new_text": replace_text}] if matches_replaced > 0 else [],
+                }
+
             if doc["file_type"] == "docx":
                 result = await run_in_threadpool(
                     find_text_variants, file_path, find_text, False
@@ -1743,10 +1787,6 @@ async def ai_command_endpoint(
                 return {"status": "success", "action": "unknown", "engine": intent.get("engine"), "message": f"I couldn't tell what new {action} text you want."}
             active_path, version_fields = ensure_edited_version(doc, db, action=f"AI {action} command")
             success = False
-            # NOTE: these must stay keyword arguments. Passing the header/footer
-            # text positionally landed it in `font_name`/`font_size`: the header
-            # branch reported success while writing no header at all, and the
-            # footer branch passed a string to Pt() and returned HTTP 500.
             if doc["file_type"] == "docx":
                 success = await run_in_threadpool(
                     apply_docx_styling, active_path, active_path,
@@ -1773,8 +1813,218 @@ async def ai_command_endpoint(
                 "intent": intent.get("intent"),
                 "engine": intent.get("engine"),
                 "new_text": new_text,
-                "message": f"Changed the {action} to '{new_text}'.",
+                "message": f"Done — changed the {action} to '{new_text}'.",
                 "changes": [{"paragraph": action.capitalize(), "old_text": "", "new_text": new_text}],
+            }
+
+        if action == "style_headings":
+            if doc["file_type"] != "docx":
+                return {
+                    "status": "success",
+                    "action": "unknown",
+                    "message": "Heading styling is currently supported for DOCX documents.",
+                }
+            active_path, version_fields = ensure_edited_version(doc, db, action="Style headings")
+            font_size = intent.get("font_size")
+            font_name = intent.get("font_name")
+            bold = intent.get("bold")
+            italic = intent.get("italic")
+            color_rgb = intent.get("color_rgb")
+            target = intent.get("target", "all")
+
+            modified_count = await run_in_threadpool(
+                style_docx_headings,
+                active_path,
+                active_path,
+                font_size=font_size,
+                font_name=font_name,
+                bold=bold,
+                italic=italic,
+                color_rgb=color_rgb,
+                target=target,
+            )
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            desc_parts = []
+            if font_size: desc_parts.append(f"{font_size}pt")
+            if bold: desc_parts.append("bold")
+            if italic: desc_parts.append("italic")
+            if color_rgb: desc_parts.append(f"color {color_rgb}")
+            desc = ", ".join(desc_parts) or "custom styling"
+
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Styled headings: {desc} ({modified_count} headings)"}},
+                 "$set": version_fields}
+            )
+            return {
+                "status": "success",
+                "action": "style_headings",
+                "engine": intent.get("engine"),
+                "count": modified_count,
+                "message": f"Done — updated styling on {modified_count} heading{'s' if modified_count != 1 else ''} ({desc}).",
+            }
+
+        if action == "style_document":
+            font_name = intent.get("font_name")
+            font_size = intent.get("font_size")
+            line_spacing = intent.get("line_spacing")
+            header_text = intent.get("header_text")
+            footer_text = intent.get("footer_text")
+
+            active_path, version_fields = ensure_edited_version(doc, db, action="Style document")
+            if doc["file_type"] == "docx":
+                await run_in_threadpool(
+                    apply_docx_styling,
+                    active_path,
+                    active_path,
+                    font_name=font_name,
+                    font_size=font_size,
+                    line_spacing=line_spacing,
+                    header_text=header_text,
+                    footer_text=footer_text,
+                )
+            else:
+                await run_in_threadpool(
+                    apply_pdf_styling,
+                    active_path,
+                    active_path,
+                    font_name=font_name,
+                    font_size=font_size,
+                    line_spacing=line_spacing,
+                    header_text=header_text,
+                    footer_text=footer_text,
+                )
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": "Applied document formatting"}},
+                 "$set": version_fields}
+            )
+            return {
+                "status": "success",
+                "action": "style_document",
+                "engine": intent.get("engine"),
+                "message": "Done — applied document formatting.",
+            }
+
+        if action == "delete_column":
+            if doc["file_type"] != "docx":
+                return {
+                    "status": "success",
+                    "action": "unknown",
+                    "message": "Table column deletion is currently supported for DOCX documents.",
+                }
+            active_path, version_fields = ensure_edited_version(doc, db, action="Delete table column")
+            col_idx = intent.get("column_index", 1)
+            tbl_idx = intent.get("table_index", "all")
+            modified_count = await run_in_threadpool(
+                delete_docx_table_column,
+                active_path,
+                active_path,
+                col_idx=col_idx,
+                table_index=tbl_idx,
+            )
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Deleted column from {modified_count} table(s)"}},
+                 "$set": version_fields}
+            )
+            return {
+                "status": "success",
+                "action": "delete_column",
+                "engine": intent.get("engine"),
+                "count": modified_count,
+                "message": f"Done — deleted column from {modified_count} table{'s' if modified_count != 1 else ''}.",
+            }
+
+        if action == "delete_row":
+            if doc["file_type"] != "docx":
+                return {
+                    "status": "success",
+                    "action": "unknown",
+                    "message": "Table row deletion is currently supported for DOCX documents.",
+                }
+            active_path, version_fields = ensure_edited_version(doc, db, action="Delete table row")
+            row_idx = intent.get("row_index", 0)
+            tbl_idx = intent.get("table_index", "all")
+            modified_count = await run_in_threadpool(
+                delete_docx_table_row,
+                active_path,
+                active_path,
+                row_idx=row_idx,
+                table_index=tbl_idx,
+            )
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Deleted row from {modified_count} table(s)"}},
+                 "$set": version_fields}
+            )
+            return {
+                "status": "success",
+                "action": "delete_row",
+                "engine": intent.get("engine"),
+                "count": modified_count,
+                "message": f"Done — deleted row from {modified_count} table{'s' if modified_count != 1 else ''}.",
+            }
+
+        if action == "delete_table":
+            if doc["file_type"] != "docx":
+                return {
+                    "status": "success",
+                    "action": "unknown",
+                    "message": "Table deletion is currently supported for DOCX documents.",
+                }
+            active_path, version_fields = ensure_edited_version(doc, db, action="Delete table")
+            tbl_idx = intent.get("table_index", "all")
+            modified_count = await run_in_threadpool(
+                delete_docx_table,
+                active_path,
+                active_path,
+                table_index=tbl_idx,
+            )
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Deleted {modified_count} table(s)"}},
+                 "$set": version_fields}
+            )
+            return {
+                "status": "success",
+                "action": "delete_table",
+                "engine": intent.get("engine"),
+                "count": modified_count,
+                "message": f"Done — deleted {modified_count} table{'s' if modified_count != 1 else ''}.",
+            }
+
+        if action == "delete_image":
+            if doc["file_type"] != "docx":
+                return {
+                    "status": "success",
+                    "action": "unknown",
+                    "message": "Image deletion is currently supported for DOCX documents.",
+                }
+            active_path, version_fields = ensure_edited_version(doc, db, action="Delete images")
+            img_idx = intent.get("image_index", "all")
+            modified_count = await run_in_threadpool(
+                delete_docx_images,
+                active_path,
+                active_path,
+                image_index=img_idx,
+            )
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id)},
+                {"$push": {"edit_history": {"date": current_date, "action": f"Deleted {modified_count} image(s)"}},
+                 "$set": version_fields}
+            )
+            return {
+                "status": "success",
+                "action": "delete_image",
+                "engine": intent.get("engine"),
+                "count": modified_count,
+                "message": f"Done — removed {modified_count} image{'s' if modified_count != 1 else ''}.",
             }
 
         if action == "image_module":
@@ -1805,25 +2055,102 @@ async def ai_command_endpoint(
             }
 
         if action == "replace_image":
-            # The intent layer deliberately returns no index. Resolve the target
-            # here, against this document's real image list, so the client can
-            # show the user which picture is about to be replaced (or pick one)
-            # before it uploads anything.
             if doc["file_type"] not in ("docx", "pdf"):
                 return {
                     "status": "success", "action": "unknown",
                     "engine": intent.get("engine"),
                     "message": f"Image replacement isn't supported for .{doc['file_type']} files.",
                 }
+            raw_bytes = None
+            if request.image_base64:
+                try:
+                    header, _, encoded = request.image_base64.partition(",")
+                    b64_data = encoded if encoded else header
+                    raw_bytes = base64.b64decode(b64_data)
+                    read_and_validate_image(raw_bytes)
+                except Exception as b64_err:
+                    logger.warning("Failed to decode image_base64: %s", b64_err)
+                    raw_bytes = None
+
             resolution = await run_in_threadpool(
                 resolve_image_targets, request.command, file_path, doc["file_type"]
             )
+            indexes = resolution.get("indexes") or []
+
+            if raw_bytes and indexes:
+                active_path, version_fields = ensure_edited_version(
+                    doc, db, action=f"Image replacement ({', '.join(str(i + 1) for i in indexes)})"
+                )
+                replacements = [{"target_index": i, "image_bytes": raw_bytes} for i in indexes]
+                if doc["file_type"] == "docx":
+                    outcome = await run_in_threadpool(
+                        replace_docx_images, active_path, active_path, replacements, "fit"
+                    )
+                else:
+                    outcome = await run_in_threadpool(
+                        replace_pdf_images, active_path, active_path, replacements, "fit"
+                    )
+                if outcome.get("ok"):
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+                    db.documents.update_one(
+                        {"_id": ObjectId(doc_id)},
+                        {"$push": {"edit_history": {"date": current_date, "action": f"Replaced image {indexes[0] + 1}"}},
+                         "$set": version_fields}
+                    )
+                    return {
+                        "status": "success",
+                        "action": "image_replaced",
+                        "engine": intent.get("engine"),
+                        "message": f"Done — replaced image {indexes[0] + 1} with the provided picture.",
+                    }
+
             return {
                 "status": "success",
                 "action": "replace_image",
                 "engine": intent.get("engine"),
                 "intent": intent.get("intent"),
                 **resolution,
+            }
+
+        if action == "describe_image":
+            raw_bytes = None
+            if request.image_base64:
+                try:
+                    header, _, encoded = request.image_base64.partition(",")
+                    b64_data = encoded if encoded else header
+                    raw_bytes = base64.b64decode(b64_data)
+                except Exception:
+                    pass
+            if not raw_bytes:
+                img_idx = intent.get("image_index", 0)
+                if isinstance(img_idx, str):
+                    try:
+                        img_idx = int(img_idx)
+                    except ValueError:
+                        img_idx = 0
+                try:
+                    raw_bytes = await run_in_threadpool(
+                        get_document_image_bytes, file_path, doc["file_type"], img_idx
+                    )
+                except Exception as img_err:
+                    logger.warning("Could not read image %s: %s", img_idx, img_err)
+
+            if not raw_bytes:
+                return {
+                    "status": "success",
+                    "action": "describe_image",
+                    "message": "I could not find an image to analyze. Paste an image or specify an image number.",
+                }
+            instruction = intent.get("instruction") or request.command
+            description = await run_in_threadpool(
+                describe_image_with_gemini, raw_bytes, instruction
+            )
+            return {
+                "status": "success",
+                "action": "describe_image",
+                "engine": "gemini_vision",
+                "description": description,
+                "message": description,
             }
 
         if action == "summarize":
@@ -1891,7 +2218,7 @@ async def ai_command_endpoint(
                 "length": length,
                 "summary": result["summary"],
                 "key_points": result.get("key_points") or [],
-                "message": f"Summary of the {source_label}:\n\n{result['summary']}",
+                "message": f"Done — generated a summary of the {source_label}.",
             }
 
         if action == "generate_mcq":
@@ -1934,17 +2261,17 @@ async def ai_command_endpoint(
                 "action": "generate_mcq",
                 "intent": intent.get("intent"),
                 "engine": result["engine"],
-                # Without this the client renders "from undefined" in its
-                # "Generated N of M requested question(s) from X." notice.
                 "source": source_label,
                 "requested": result["requested"],
                 "questions": result["questions"],
-                "message": result["message"],
+                "message": f"Done — generated {len(result['questions'])} MCQs.",
             }
 
         if action == "rewrite":
             source_text = _explicit_text(request)
-            source_label = "provided text" if source_text else "whole document"
+            if not source_text and request.selection and request.selection.text:
+                source_text = request.selection.text
+            source_label = "selected text" if (request.selection and request.selection.text) else ("provided text" if source_text else "whole document")
             if not source_text:
                 source_text = await run_in_threadpool(
                     _document_text, file_path, doc["file_type"]
@@ -1975,10 +2302,113 @@ async def ai_command_endpoint(
                 "instruction": instruction,
                 "rewritten_text": rewritten,
                 "source": source_label,
-                "message": result.get("message") or f"Rewritten following instruction '{instruction}'.",
+                "message": f"Done — rewritten following instruction '{instruction}'.",
             }
 
-        return {"status": "success", "action": "unknown", "intent": intent.get("intent"), "engine": intent.get("engine"), "message": "I scanned your document. Try e.g. 'Change print to not print' or 'Change the header to RapidDoc Report'."}
+        if action == "qa_extract":
+            source_text = ""
+            if request.selection and request.selection.text:
+                source_text = request.selection.text
+            else:
+                source_text = await run_in_threadpool(
+                    _document_text, file_path, doc["file_type"]
+                )
+            if not source_text:
+                return {
+                    "status": "success",
+                    "action": "qa_extract",
+                    "message": "I could not find any readable text in this document.",
+                }
+            query = intent.get("question") or intent.get("instruction") or request.command
+            answer = await run_in_threadpool(
+                answer_or_extract_with_gemini, source_text, query
+            )
+            return {
+                "status": "success",
+                "action": "qa_extract",
+                "engine": "gemini",
+                "query": query,
+                "answer": answer,
+                "message": answer,
+            }
+
+        if action == "composite":
+            steps = intent.get("steps") or []
+            reports = []
+            final_summary = None
+            final_mcq = None
+            for step in steps:
+                s_action = step.get("action")
+                if s_action == "replace":
+                    f_text = step.get("find_text", "")
+                    r_text = step.get("replace_text", "")
+                    if f_text:
+                        active_path, version_fields = ensure_edited_version(doc, db, action=f"Replace '{f_text}'")
+                        cnt = 0
+                        if doc["file_type"] == "docx":
+                            cnt = await run_in_threadpool(find_replace_docx, active_path, active_path, f_text, r_text, False)
+                        else:
+                            cnt = await run_in_threadpool(find_replace_pdf, active_path, active_path, f_text, r_text, False)
+                        reports.append(f"replaced {cnt} occurrence{'s' if cnt != 1 else ''} of '{f_text}' with '{r_text}'")
+                elif s_action == "style_headings" and doc["file_type"] == "docx":
+                    active_path, version_fields = ensure_edited_version(doc, db, action="Style headings")
+                    cnt = await run_in_threadpool(
+                        style_docx_headings, active_path, active_path,
+                        font_size=step.get("font_size"), font_name=step.get("font_name"),
+                        bold=step.get("bold"), italic=step.get("italic"), color_rgb=step.get("color_rgb")
+                    )
+                    reports.append(f"styled {cnt} heading(s)")
+                elif s_action == "delete_column" and doc["file_type"] == "docx":
+                    active_path, version_fields = ensure_edited_version(doc, db, action="Delete table column")
+                    cnt = await run_in_threadpool(
+                        delete_docx_table_column, active_path, active_path,
+                        col_idx=step.get("column_index", 1), table_index=step.get("table_index", "all")
+                    )
+                    reports.append(f"deleted column from {cnt} table(s)")
+                elif s_action == "delete_row" and doc["file_type"] == "docx":
+                    active_path, version_fields = ensure_edited_version(doc, db, action="Delete table row")
+                    cnt = await run_in_threadpool(
+                        delete_docx_table_row, active_path, active_path,
+                        row_idx=step.get("row_index", 0), table_index=step.get("table_index", "all")
+                    )
+                    reports.append(f"deleted row from {cnt} table(s)")
+                elif s_action == "delete_image" and doc["file_type"] == "docx":
+                    active_path, version_fields = ensure_edited_version(doc, db, action="Delete images")
+                    cnt = await run_in_threadpool(
+                        delete_docx_images, active_path, active_path,
+                        image_index=step.get("image_index", "all")
+                    )
+                    reports.append(f"removed {cnt} image(s)")
+                elif s_action == "summarize":
+                    src = await run_in_threadpool(_document_text, file_path, doc["file_type"])
+                    if src:
+                        s_res = await run_in_threadpool(summarize_document, src, step.get("length"), doc.get("name", "Doc"))
+                        final_summary = s_res
+                        reports.append("generated summary")
+                elif s_action == "generate_mcq":
+                    src = await run_in_threadpool(_document_text, file_path, doc["file_type"])
+                    if src:
+                        q_res = await run_in_threadpool(generate_mcqs, src, step.get("num_questions", 5))
+                        final_mcq = q_res
+                        reports.append(f"generated {len(q_res.get('questions', []))} MCQs")
+
+            combined_msg = "Done — " + ", ".join(reports) + "." if reports else "Processed multi-step command."
+            return {
+                "status": "success",
+                "action": "composite",
+                "engine": intent.get("engine", "universal"),
+                "message": combined_msg,
+                "summary": final_summary.get("summary") if final_summary else None,
+                "questions": final_mcq.get("questions") if final_mcq else None,
+            }
+
+        return {
+            "status": "success",
+            "action": "unknown",
+            "intent": intent.get("intent"),
+            "engine": intent.get("engine"),
+            "message": "I could not determine the action. Try e.g. 'Make all headings bold', 'Delete the second column from all tables', or 'Summarize this document'."
+        }
 
     except HTTPException:
         raise

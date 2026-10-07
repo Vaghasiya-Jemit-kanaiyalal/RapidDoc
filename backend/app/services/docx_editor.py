@@ -1,5 +1,5 @@
 import docx
-from docx.shared import Pt
+from docx.shared import Pt, RGBColor, Inches
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.table import Table
@@ -1391,3 +1391,236 @@ def selective_replace_docx(
     except Exception as e:
         logger.error("Error in selective find-replace DOCX: %s", e)
         return {"matches_replaced": 0, "changes": []}
+
+
+# ---------------------------------------------------------------------------
+# Universal Command Bar: Structural Table & Heading Mutations
+# ---------------------------------------------------------------------------
+
+def delete_docx_table_column(
+    doc_path: str,
+    output_path: str,
+    table_index: int = None,
+    col_index: int = 1,
+) -> dict:
+    """Delete a column from one or all tables in a DOCX document.
+
+    col_index is 0-indexed (e.g. 0 for 1st column, 1 for 2nd column, -1 for last column).
+    """
+    try:
+        doc = docx.Document(doc_path)
+        tables = doc.tables
+        if not tables:
+            return {"success": False, "modified_tables": 0, "message": "No tables found in this document."}
+
+        target_tables = [tables[table_index]] if (table_index is not None and 0 <= table_index < len(tables)) else tables
+        modified_count = 0
+
+        for tbl in target_tables:
+            if not tbl.rows:
+                continue
+            num_cols = len(tbl.rows[0].cells)
+            target_col = col_index if col_index >= 0 else num_cols + col_index
+            if 0 <= target_col < num_cols:
+                for row in tbl.rows:
+                    if target_col < len(row.cells):
+                        tc = row.cells[target_col]._tc
+                        parent = tc.getparent()
+                        if parent is not None:
+                            parent.remove(tc)
+                # Cleanup gridCol in tblGrid
+                tblGrid = tbl._tbl.find(qn("w:tblGrid"))
+                if tblGrid is not None:
+                    gridCols = tblGrid.findall(qn("w:gridCol"))
+                    if 0 <= target_col < len(gridCols):
+                        tblGrid.remove(gridCols[target_col])
+                modified_count += 1
+
+        if modified_count > 0:
+            _save_docx_clean(doc, output_path)
+            col_label = f"column {col_index + 1}" if col_index >= 0 else "the last column"
+            return {
+                "success": True,
+                "modified_tables": modified_count,
+                "message": f"Done — deleted {col_label} from {modified_count} table(s).",
+            }
+        return {"success": False, "modified_tables": 0, "message": f"Column index {col_index + 1} was out of range for the document tables."}
+    except Exception as e:
+        logger.error("Error deleting table column in DOCX: %s", e)
+        return {"success": False, "modified_tables": 0, "message": f"Failed to delete table column: {str(e)}"}
+
+
+def delete_docx_table_row(
+    doc_path: str,
+    output_path: str,
+    table_index: int = None,
+    row_index: int = 0,
+) -> dict:
+    """Delete a row from one or all tables in a DOCX document.
+
+    row_index is 0-indexed (e.g. 0 for 1st row, -1 for last row).
+    """
+    try:
+        doc = docx.Document(doc_path)
+        tables = doc.tables
+        if not tables:
+            return {"success": False, "modified_tables": 0, "message": "No tables found in this document."}
+
+        target_tables = [tables[table_index]] if (table_index is not None and 0 <= table_index < len(tables)) else tables
+        modified_count = 0
+
+        for tbl in target_tables:
+            num_rows = len(tbl.rows)
+            target_row = row_index if row_index >= 0 else num_rows + row_index
+            if 0 <= target_row < num_rows:
+                tr = tbl.rows[target_row]._tr
+                parent = tr.getparent()
+                if parent is not None:
+                    parent.remove(tr)
+                modified_count += 1
+
+        if modified_count > 0:
+            _save_docx_clean(doc, output_path)
+            row_label = f"row {row_index + 1}" if row_index >= 0 else "the last row"
+            return {
+                "success": True,
+                "modified_tables": modified_count,
+                "message": f"Done — deleted {row_label} from {modified_count} table(s).",
+            }
+        return {"success": False, "modified_tables": 0, "message": f"Row index {row_index + 1} was out of range for the document tables."}
+    except Exception as e:
+        logger.error("Error deleting table row in DOCX: %s", e)
+        return {"success": False, "modified_tables": 0, "message": f"Failed to delete table row: {str(e)}"}
+
+
+def delete_docx_table(
+    doc_path: str,
+    output_path: str,
+    table_index: int = None,
+) -> dict:
+    """Delete a specific table or all tables from a DOCX document."""
+    try:
+        doc = docx.Document(doc_path)
+        tables = list(doc.tables)
+        if not tables:
+            return {"success": False, "deleted_tables": 0, "message": "No tables found in this document."}
+
+        target_tables = [tables[table_index]] if (table_index is not None and 0 <= table_index < len(tables)) else tables
+        deleted_count = 0
+
+        for tbl in target_tables:
+            tbl_elm = tbl._tbl
+            parent = tbl_elm.getparent()
+            if parent is not None:
+                parent.remove(tbl_elm)
+                deleted_count += 1
+
+        if deleted_count > 0:
+            _save_docx_clean(doc, output_path)
+            return {
+                "success": True,
+                "deleted_tables": deleted_count,
+                "message": f"Done — deleted {deleted_count} table(s).",
+            }
+        return {"success": False, "deleted_tables": 0, "message": "Target table could not be found."}
+    except Exception as e:
+        logger.error("Error deleting table in DOCX: %s", e)
+        return {"success": False, "deleted_tables": 0, "message": f"Failed to delete table: {str(e)}"}
+
+
+def style_docx_headings(
+    doc_path: str,
+    output_path: str,
+    font_size: float = None,
+    bold: bool = None,
+    italic: bool = None,
+    color_rgb: tuple = None,
+    font_name: str = None,
+    level: int = None,
+) -> dict:
+    """Format and style headings in a DOCX document (color, size, weight, font family)."""
+    try:
+        doc = docx.Document(doc_path)
+        modified_count = 0
+
+        for p in doc.paragraphs:
+            lvl = _heading_level(p, _paragraph_style_name(p))
+            # If paragraph is Heading 1-6 or starts with heading style
+            is_heading = (lvl > 0) or (p.style.name and p.style.name.lower().startswith("heading"))
+            if is_heading:
+                if level is not None and lvl != level and lvl != 0:
+                    continue
+                # If paragraph has no runs but has text, add a run
+                if not p.runs and p.text:
+                    p.add_run(p.text)
+                for run in p.runs:
+                    if font_size is not None:
+                        run.font.size = Pt(font_size)
+                    if bold is not None:
+                        run.font.bold = bold
+                    if italic is not None:
+                        run.font.italic = italic
+                    if color_rgb is not None:
+                        run.font.color.rgb = RGBColor(*color_rgb)
+                    if font_name:
+                        run.font.name = font_name
+                modified_count += 1
+
+        if modified_count > 0:
+            _save_docx_clean(doc, output_path)
+            details = []
+            if color_rgb: details.append(f"color {color_rgb}")
+            if font_size: details.append(f"{font_size}pt")
+            if bold: details.append("bold")
+            if font_name: details.append(font_name)
+            detail_str = f" ({', '.join(details)})" if details else ""
+            return {
+                "success": True,
+                "headings_modified": modified_count,
+                "message": f"Done — styled {modified_count} heading(s){detail_str}.",
+            }
+        return {"success": False, "headings_modified": 0, "message": "No headings were detected in this document."}
+    except Exception as e:
+        logger.error("Error styling headings in DOCX: %s", e)
+        return {"success": False, "headings_modified": 0, "message": f"Failed to style headings: {str(e)}"}
+
+
+def delete_docx_images(
+    doc_path: str,
+    output_path: str,
+    image_indexes: list = None,
+) -> dict:
+    """Delete all images or specific indexed images in a DOCX document."""
+    try:
+        doc = docx.Document(doc_path)
+        targets = collect_docx_image_targets(doc)
+        if not targets:
+            return {"success": False, "deleted_images": 0, "message": "No images found in this document."}
+
+        target_set = set(image_indexes) if image_indexes is not None else None
+        deleted_count = 0
+
+        for target in targets:
+            idx = target.get("index")
+            if target_set is not None and idx not in target_set:
+                continue
+            blip = target.get("blip")
+            drawing = _drawing_for_blip(blip)
+            if drawing is not None:
+                parent = drawing.getparent()
+                if parent is not None:
+                    parent.remove(drawing)
+                    deleted_count += 1
+
+        if deleted_count > 0:
+            _save_docx_clean(doc, output_path)
+            return {
+                "success": True,
+                "deleted_images": deleted_count,
+                "message": f"Done — deleted {deleted_count} image(s).",
+            }
+        return {"success": False, "deleted_images": 0, "message": "Selected image could not be removed."}
+    except Exception as e:
+        logger.error("Error deleting images in DOCX: %s", e)
+        return {"success": False, "deleted_images": 0, "message": f"Failed to delete images: {str(e)}"}
+

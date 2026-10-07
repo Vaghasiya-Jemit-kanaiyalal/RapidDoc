@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     STORAGE_TYPE: str = "local"
     STORAGE_LOCAL_PATH: str = "storage"
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
 
     # --- Local brain models (all 4) --------------------------------------
     # Turning this off disables every local brain; requests then fall back to

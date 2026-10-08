@@ -171,6 +171,14 @@ const normalizeEdit = (key, value) => {
       text: String(value ?? ''),
     };
   }
+  const para = /^p:(\d+)$/.exec(String(key));
+  if (para) {
+    return {
+      kind: 'paragraph',
+      index: Number(para[1]),
+      text: String(value ?? ''),
+    };
+  }
   // PDF blocks were historically keyed "<page>_<block>", either bare (the shape
   // persisted in older draft_edits) or with the `b:` namespace. Recognise both,
   // otherwise `parseInt` would quietly turn "2_5" into paragraph 2.
@@ -275,10 +283,10 @@ const DocumentImage = ({ docId, index, maxHeight = 220, alt, className = '', ver
 };
 
 /**
- * One image in the document stream, with the double-click-to-replace affordance.
+ * One image in the document stream, with the click-to-replace affordance.
  *
- * Kept as its own component so the hover overlay and the double-click handler
- * exist in one place for both the DOCX and PDF render paths, which are otherwise
+ * Kept as its own component so the hover overlay and the click handler exist
+ * in one place for both the DOCX and PDF render paths, which are otherwise
  * near-identical for images and would drift apart.
  */
 const EditableImageBlock = ({ docId, index, caption, alt, maxHeight, version, onRequestReplace, onRequestResize, replacing }) => {
@@ -289,8 +297,8 @@ const EditableImageBlock = ({ docId, index, caption, alt, maxHeight, version, on
       className="my-3 bg-white border border-slate-100 rounded-lg p-2.5 group/image relative"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      onDoubleClick={() => { if (!replacing) onRequestReplace(index); }}
-      title="Double-click to replace this image"
+      onClick={() => { if (!replacing) onRequestReplace(index); }}
+      title="Click to replace this image"
     >
       <DocumentImage
         docId={docId}
@@ -303,7 +311,7 @@ const EditableImageBlock = ({ docId, index, caption, alt, maxHeight, version, on
         {caption}
       </span>
 
-      {/* Hover actions. Hidden from touch, where there is no double-click. */}
+      {/* Hover actions. Hidden from touch, where hover is unavailable. */}
       {hovered && !replacing && (
         <div className="absolute top-3 right-3 flex items-center gap-1.5 opacity-0 group-hover/image:opacity-100 focus-within:opacity-100 transition pointer-events-none group-hover/image:pointer-events-auto">
           <button
@@ -1059,20 +1067,22 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
       let editsPayload = [];
       const nextSavedEdits = { ...savedEdits };
       if (doc.file_type === 'docx') {
-        editsPayload = entries.map((edit) => {
-          if (edit.kind === 'table_cell') {
-            const { table_index, row, col, text } = edit;
-            nextSavedEdits[cellKey(table_index, row, col)] = {
-              old: findTableCellText(table_index, row, col),
-              new: text,
-            };
-            return { kind: 'table_cell', table_index, row, col, text };
-          }
-          const { index, text } = edit;
-          const oldText = (content || []).find((c) => c.index === index)?.text ?? '';
-          nextSavedEdits[paraKey(index)] = { old: oldText, new: text };
-          return { kind: 'paragraph', index, text };
-        });
+        editsPayload = entries
+          .filter((edit) => edit.kind === 'table_cell' || edit.kind === 'paragraph')
+          .map((edit) => {
+            if (edit.kind === 'table_cell') {
+              const { table_index, row, col, text } = edit;
+              nextSavedEdits[cellKey(table_index, row, col)] = {
+                old: findTableCellText(table_index, row, col),
+                new: text,
+              };
+              return { kind: 'table_cell', table_index, row, col, text };
+            }
+            const { index, text } = edit;
+            const oldText = (content || []).find((c) => c.index === index)?.text ?? '';
+            nextSavedEdits[paraKey(index)] = { old: oldText, new: text };
+            return { kind: 'paragraph', index, text };
+          });
       } else {
         // PDF payload matches TextEditItem model
         editsPayload = entries;
@@ -1119,7 +1129,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   };
 
   /**
-   * Double-click / hover "Replace" on an image: remember which one, then open
+   * Click / hover "Replace" on an image: remember which one, then open
    * the OS file picker. The chosen index lives in a ref rather than state
    * because it is only read once, inside the change handler.
    */
@@ -1716,11 +1726,18 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     }
   };
 
-  // Feature 3: highlight only the part of the text that actually changed
-  const highlightDiff = (oldText, newText) => {
+  // Feature 3: highlight only the part of the text that actually changed with distinct styles
+  const highlightDiff = (oldText, newText, type = 'user') => {
     if (!oldText && !newText) return '';
+    const badgeClass =
+      type === 'ai'
+        ? 'bg-purple-200 text-purple-950 ring-1 ring-purple-300 font-bold px-1 py-0.5 rounded shadow-2xs'
+        : type === 'saved'
+        ? 'bg-emerald-200 text-emerald-950 ring-1 ring-emerald-300 font-bold px-1 py-0.5 rounded shadow-2xs'
+        : 'bg-amber-200 text-amber-950 ring-1 ring-amber-300 font-bold px-1 py-0.5 rounded shadow-2xs';
+
     if (!oldText) {
-      return <mark className="bg-amber-200 text-amber-950 font-bold px-1 rounded">{newText}</mark>;
+      return <mark className={badgeClass}>{newText}</mark>;
     }
     if (!newText) return newText;
     if (oldText === newText) return newText;
@@ -1740,12 +1757,12 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
     const start = prefixLen;
     const end = newText.length - suffixLen;
     if (start >= end) {
-      return <mark className="bg-amber-200 text-amber-950 font-semibold px-1 rounded">{newText}</mark>;
+      return <mark className={badgeClass}>{newText}</mark>;
     }
     return (
       <>
         {newText.slice(0, start)}
-        <mark className="bg-amber-200 text-amber-950 font-semibold px-1 py-0.5 rounded shadow-2xs">
+        <mark className={badgeClass}>
           {newText.slice(start, end)}
         </mark>
         {newText.slice(end)}
@@ -1786,20 +1803,25 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         throw new Error('The AI returned an empty rewrite.');
       }
       if (doc.file_type === 'docx') {
-        setPendingEdits((prev) => ({ ...prev, [source.index]: rewritten }));
+        setPendingEdits((prev) => ({
+          ...prev,
+          [key]: { kind: 'paragraph', index: source.index, text: rewritten, isAiRewrite: true }
+        }));
       } else {
         setPendingEdits((prev) => ({
           ...prev,
           [key]: {
+            kind: 'pdf_block',
             page_num: source.page_num,
             block_no: source.block_no,
             bbox: source.bbox,
-            text: rewritten
+            text: rewritten,
+            isAiRewrite: true
           }
         }));
       }
-      const engineLabel = data.engine === 'gemini' ? 'Gemini (cloud fallback)' : data.engine === 'local' ? 'Local Brain Model' : 'RapidDoc AI';
-      setAiResult(`Rewritten by ${engineLabel}. Review the highlighted text, then press Save Changes.`);
+      const engineLabel = data.engine === 'gemini' ? 'Gemini AI' : data.engine === 'local' ? 'Local Brain Model' : 'RapidDoc AI';
+      setAiResult(`✨ Rewritten by ${engineLabel}. Review highlighted text, then click "Save Changes".`);
       setRewriteInstruction('');
     } catch (err) {
       setAiResult(`AI rewrite failed: ${err.message}`);
@@ -2099,7 +2121,9 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
               <div className="flex justify-between items-center gap-3 mb-3 pb-2 border-b border-slate-200">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
-                    {viewMode === 'full' ? 'Live Document Preview' : 'Interactive Edit Mode'}
+                    {viewMode === 'full'
+                      ? 'Live Document Preview'
+                      : 'Interactive Edit Mode'}
                   </span>
                   {doc.file_type === 'pdf' && (
                     <span className="text-[9px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md font-bold uppercase flex items-center gap-1">
@@ -2133,6 +2157,58 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                   </button>
                 </div>
               </div>
+
+              {/* Active Document Changes Banner & Diff Inspector */}
+              {(Object.keys(pendingEdits).length > 0 || Object.keys(savedEdits).length > 0 || aiChanges.length > 0) && (
+                <div className="my-2.5 bg-white/95 backdrop-blur-sm border border-slate-200/90 rounded-xl p-3 shadow-xs transition duration-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse" />
+                      <span className="text-xs font-bold text-slate-800">
+                        Document Modifications:
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                        {Object.keys(pendingEdits).length > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold border border-amber-300">
+                            ✏️ {Object.keys(pendingEdits).length} Pending Edit(s)
+                          </span>
+                        )}
+                        {aiChanges.length > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-bold border border-indigo-300">
+                            🤖 {aiChanges.length} AI Brain Change(s)
+                          </span>
+                        )}
+                        {Object.keys(savedEdits).length > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-300">
+                            ✅ {Object.keys(savedEdits).length} Saved Edit(s)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {viewMode === 'full' ? (
+                        <button
+                          onClick={() => setViewMode('edit')}
+                          className="text-[11px] font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-lg transition border border-blue-200"
+                        >
+                          Review in Interactive Editor →
+                        </button>
+                      ) : (
+                        Object.keys(pendingEdits).length > 0 && (
+                          <button
+                            onClick={handleSaveEdits}
+                            disabled={savingEdits}
+                            className="text-[11px] font-bold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-3 py-1 rounded-lg transition shadow-xs flex items-center gap-1"
+                          >
+                            {savingEdits ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                            <span>Save {Object.keys(pendingEdits).length} Edit(s)</span>
+                          </button>
+                        )
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
             {viewMode === 'full' ? (
               <div className="flex-grow overflow-y-auto h-[calc(100vh-250px)] min-h-[500px] rounded-xl bg-slate-300/40 p-2 sm:p-3">
@@ -2313,7 +2389,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                               </div>
                               <span className="block px-3 py-1 text-[8px] font-bold text-slate-400 uppercase bg-slate-50 border-t border-slate-100 rounded-b-lg">
                                 Table {table.table_index + 1} &middot; {table.n_rows} rows &times; {table.n_cols} columns &middot; double-click a cell to edit
-                              </span>
+
                             </div>
                           );
                         }
@@ -2341,11 +2417,13 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                         const key = paraKey(p.index);
                         const pending = pendingEdits[key];
                         const hasUserEdit = pending !== undefined && pending.text !== p.text;
+                        const isAiRewrite = pending?.isAiRewrite;
                         const savedEdit = savedEdits[key];
                         const change = aiChanges.find(c => c.index === p.index);
                         const isHighlighted = hasUserEdit || !!change || !!savedEdit;
                         const currentText = pending !== undefined ? pending.text : p.text;
                         const oldText = savedEdit ? savedEdit.old : (change ? change.old_text : p.text);
+
 
                         // Alignment (MOD-03)
                         const alignClass = p.alignment === 'center' ? 'text-center'
@@ -2363,6 +2441,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                         const isBullet = (p.style && p.style.toLowerCase().includes('bullet')) || p.is_list_item;
                         const isNumbered = p.style && p.style.toLowerCase().includes('number');
 
+                        const diffType = isAiRewrite ? 'ai' : hasUserEdit ? 'user' : savedEdit ? 'saved' : (change ? 'ai' : 'user');
                         const blockStyle = {
                           fontFamily: p.font_name || fontName,
                           fontSize: p.heading_level ? undefined : `${p.font_size || fontSize}pt`,
@@ -2440,13 +2519,18 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                                   <span>{hasUserEdit ? 'User Edit Highlighted' : savedEdit ? 'Edited Highlighted' : 'AI Edit Highlighted'}</span>
                                   {(change || savedEdit) && (
                                     <>
-                                      <span className="line-through text-amber-600/70 ml-1">{change ? change.old_text : savedEdit.old}</span>
-                                      <span className="text-amber-500">→</span>
-                                      <span className="text-amber-900 font-extrabold">{change ? change.new_text : savedEdit.new}</span>
+                                      <span className="line-through opacity-70 ml-1">{change ? change.old_text : savedEdit.old}</span>
+                                      <span>→</span>
+                                      <span className="font-extrabold">{change ? change.new_text : savedEdit.new}</span>
                                     </>
                                   )}
                                 </span>
                               </div>
+                            )}
+                            {!isHighlighted && !isEditing && (
+                              <span className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 transition text-[8px] font-bold text-blue-500 uppercase tracking-widest bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md pointer-events-none">
+                                Click to edit
+                              </span>
                             )}
                           </div>
                         );
@@ -2520,11 +2604,15 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                             const block = item.block;
                             const blockKey = pdfBlockKey(page.page_num, block.block_no);
                             const isEditing = editingIndex === blockKey;
-                            const hasUserEdit = pendingEdits[blockKey] !== undefined && pendingEdits[blockKey].text !== block.text;
+                            const pending = pendingEdits[blockKey];
+                            const hasUserEdit = pending !== undefined && pending.text !== block.text;
+                            const isAiRewrite = pending?.isAiRewrite;
                             const savedEdit = savedEdits[blockKey];
-                            const isHighlighted = hasUserEdit || !!savedEdit;
-                            const currentText = pendingEdits[blockKey] !== undefined ? pendingEdits[blockKey].text : block.text;
-                            const saveOld = savedEdit ? savedEdit.old : block.text;
+                            const change = aiChanges.find(c => c.paragraph === `Page ${page.page_num + 1}` || c.page_num === page.page_num);
+                            const isHighlighted = hasUserEdit || !!change || !!savedEdit;
+                            const currentText = pending !== undefined ? pending.text : block.text;
+                            const saveOld = savedEdit ? savedEdit.old : (change ? change.old_text : block.text);
+                            const diffType = isAiRewrite ? 'ai' : hasUserEdit ? 'user' : savedEdit ? 'saved' : (change ? 'ai' : 'user');
                             const pdfFamily = /times|garamond|georgia|serif/i.test(block.font || '') ? 'Times New Roman, serif'
                               : /courier|mono/i.test(block.font || '') ? 'Courier New, monospace'
                               : (block.font || fontName);
@@ -2539,10 +2627,14 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                             return (
                               <div 
                                 key={block.block_no}
-                                onDoubleClick={() => { if (!isEditing) setEditingIndex(blockKey); }}
+                                onClick={() => { if (!isEditing) setEditingIndex(blockKey); }}
                                 className={`group relative p-3 border rounded-xl transition cursor-pointer text-left ${
                                   isHighlighted
-                                    ? 'bg-amber-50/90 border-amber-300 shadow-xs'
+                                    ? isAiRewrite
+                                      ? 'bg-purple-50/90 border-purple-300 shadow-xs'
+                                      : savedEdit
+                                      ? 'bg-emerald-50/90 border-emerald-300 shadow-xs'
+                                      : 'bg-amber-50/90 border-amber-300 shadow-xs'
                                     : 'bg-white hover:bg-slate-50/50 border-slate-100 hover:border-amber-200'
                                 }`}
                               >
@@ -2582,7 +2674,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                                             handleRewriteBlock({ key: blockKey, page_num: page.page_num, block_no: block.block_no, bbox: block.bbox, text: currentText });
                                           }
                                         }}
-                                        placeholder="AI instruction: e.g. Simplify this..."
+                                        placeholder="AI instruction: e.g. Simplify this, Fix grammar, Make formal..."
                                         className="flex-1 min-w-[160px] px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-[11px] text-slate-700 focus:border-blue-400 outline-none"
                                       />
                                       <button
@@ -2610,22 +2702,39 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                                   </div>
                                 ) : (
                                   <p 
-                                    className="text-xs leading-relaxed font-medium"
+                                    className="text-xs leading-relaxed font-medium whitespace-pre-wrap"
                                     style={pdfStyle}
                                   >
-                                    {currentText ? (isHighlighted ? highlightDiff(saveOld, currentText) : currentText) : (
+                                    {currentText ? (isHighlighted ? highlightDiff(saveOld, currentText, diffType) : currentText) : (
                                       <span className="text-slate-300 italic">Empty text block. Click to write...</span>
                                     )}
                                   </p>
                                 )}
                                 {isHighlighted && !isEditing && (
-                                  <span className="mt-1.5 inline-block text-[7px] font-bold text-amber-800 uppercase bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">
-                                    {hasUserEdit ? 'User Edit Highlighted' : 'Edited Highlighted'}
-                                  </span>
+                                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                    <span className={`inline-flex items-center gap-1 text-[7px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded border ${
+                                      isAiRewrite
+                                        ? 'text-purple-800 bg-purple-100 border-purple-300'
+                                        : savedEdit
+                                        ? 'text-emerald-800 bg-emerald-100 border-emerald-300'
+                                        : change
+                                        ? 'text-indigo-800 bg-indigo-100 border-indigo-300'
+                                        : 'text-amber-800 bg-amber-100 border-amber-300'
+                                    }`}>
+                                      <span>{isAiRewrite ? '✨ AI Rewritten' : hasUserEdit ? '✏️ User Edited' : savedEdit ? '✅ Saved Edit' : '🤖 AI Modified'}</span>
+                                      {(change || savedEdit) && (
+                                        <>
+                                          <span className="line-through opacity-70 ml-1">{change ? change.old_text : savedEdit.old}</span>
+                                          <span>→</span>
+                                          <span className="font-extrabold">{change ? change.new_text : savedEdit.new}</span>
+                                        </>
+                                      )}
+                                    </span>
+                                  </div>
                                 )}
                                 {!isHighlighted && !isEditing && (
-                                  <span className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition text-[7px] font-bold text-amber-600 uppercase bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded pointer-events-none">
-                                    Do you want to edit? (Double-click)
+                                  <span className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition text-[7px] font-bold text-blue-500 uppercase bg-blue-50 border border-blue-100 px-1.5 py-0.5 rounded pointer-events-none">
+                                    Click to edit
                                   </span>
                                 )}
                               </div>
@@ -3672,7 +3781,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
       )}
 
       {/* Hidden file pickers, triggered programmatically.
-          Double-clicking an image has no <input> to attach to, so the click is
+          Clicking an image has no <input> to attach to, so the click is
           forwarded to these instead of asking the user to find an upload button. */}
       <input
         ref={imagePickInputRef}

@@ -22,11 +22,30 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _el_text(el) -> str:
-    return "".join(t.text or "" for t in el.findall(qn("w:t")))
+    """Rendered text of a <w:r> element, including soft line breaks.
+
+    ``<w:br/>`` inside a run becomes ``"\\n"``; python-docx's ``Run.text``
+    drops it entirely, which made a paragraph with a manual line break read as
+    two words glued together in the editor and destroyed the break on edit.
+    """
+    parts = []
+    for child in el:
+        if child.tag == qn("w:t"):
+            parts.append(child.text or "")
+        elif child.tag == qn("w:br"):
+            parts.append("\n")
+    return "".join(parts)
 
 
 def _el_set_text(el, text: str) -> None:
-    """Set the text of a <w:r> element, keeping a single <w:t> node."""
+    """Set the text of a <w:r> element, keeping a single <w:t> node.
+
+    Any existing ``<w:br/>`` nodes are dropped first: they would otherwise
+    survive inside cloned runs and resurface as phantom newlines after the
+    text of a line-broken paragraph is rewritten.
+    """
+    for br in el.findall(qn("w:br")):
+        el.remove(br)
     ts = el.findall(qn("w:t"))
     if not ts:
         t = OxmlElement("w:t")
@@ -36,6 +55,16 @@ def _el_set_text(el, text: str) -> None:
         el.remove(t)
     ts[0].text = text or ""
     ts[0].set(qn("xml:space"), "preserve")
+
+
+def _p_text(p) -> str:
+    """Full rendered text of a paragraph, newlines included.
+
+    The whole edit engine measures against this instead of ``p.text`` so that
+    offsets stay aligned with the run span math in :func:`_replace_span`, which
+    counts characters through :func:`_el_text`.
+    """
+    return "".join(_el_text(r._r) for r in p.runs)
 
 
 def _el_highlight_yellow(el) -> None:
@@ -148,7 +177,7 @@ def _replace_span(p, start: int, end: int, new_text: str) -> None:
         return
 
     # Pure deletion of the entire paragraph
-    if not new_text and start == 0 and end == len(p.text):
+    if not new_text and start == 0 and end == len(_p_text(p)):
         for el in elements:
             p._p.remove(el)
         return
@@ -191,7 +220,7 @@ def replace_paragraph_text_preserving_format(p, new_text: str, old_text: str = N
     """Replace paragraph text from old_text to new_text, preserving run
     formatting and highlighting the diff region yellow. Falls back to a
     full-paragraph diff when old_text doesn't match the current text."""
-    current = p.text
+    current = _p_text(p)
     if old_text is None:
         old_text = current
     elif old_text != current:
@@ -201,7 +230,7 @@ def replace_paragraph_text_preserving_format(p, new_text: str, old_text: str = N
             # Substring-style edit within a larger paragraph
             start = current.find(old_text)
             _replace_span(p, start, start + len(old_text), new_text)
-            return p.text != current
+            return _p_text(p) != current
 
     if old_text == new_text:
         return False
@@ -241,7 +270,7 @@ def _replace_occurrences(p, find_text: str, replace_text: str, case_sensitive: b
     formatting, highlighting changed spans yellow. Returns match count."""
     flags = 0 if case_sensitive else re.IGNORECASE
     pattern = re.compile(re.escape(find_text), flags)
-    matches = list(pattern.finditer(p.text))
+    matches = list(pattern.finditer(_p_text(p)))
     for m in reversed(matches):
         _replace_span(p, m.start(), m.end(), replace_text)
     return len(matches)
@@ -382,7 +411,7 @@ def _paragraph_descriptor(paragraph, index: int) -> dict:
 
     return {
         "index": index,
-        "text": paragraph.text,
+        "text": _p_text(paragraph),
         "runs": runs_data,
         "alignment": align_str,
         "font_name": (run_font.font.name if run_font is not None else None),
@@ -588,7 +617,7 @@ def iter_docx_body_items(doc_path: str):
         elif child.tag == qn("w:tbl"):
             table = Table(child, body)
             rows = [
-                ["\n".join(p.text for p in cell.paragraphs) for cell in row.cells]
+                ["\n".join(_p_text(p) for p in cell.paragraphs) for cell in row.cells]
                 for row in table.rows
             ]
             yield "table", {
@@ -1150,7 +1179,7 @@ def get_docx_content(doc_path: str) -> list:
 
             content.append({
                 "index": i,
-                "text": p.text,
+                "text": _p_text(p),
                 "font_name": (run_font.font.name if run_font is not None else None),
                 "font_size": (run_font.font.size.pt if run_font is not None and run_font.font.size is not None else None),
                 "bold": (run_font.font.bold if run_font is not None else None),
@@ -1204,7 +1233,7 @@ def _set_table_cell_text(table, row_idx: int, col_idx: int, new_text: str) -> bo
             return False
         cell.add_paragraph("")
 
-    before = "\n".join(p.text for p in cell.paragraphs)
+    before = "\n".join(_p_text(p) for p in cell.paragraphs)
     if before == new_text:
         return False
 
@@ -1214,8 +1243,8 @@ def _set_table_cell_text(table, row_idx: int, col_idx: int, new_text: str) -> bo
     for offset, line in enumerate(lines):
         if offset < len(paragraphs):
             target = paragraphs[offset]
-            if target.text != line:
-                replace_paragraph_text_preserving_format(target, line, old_text=target.text)
+            if _p_text(target) != line:
+                replace_paragraph_text_preserving_format(target, line, old_text=_p_text(target))
         else:
             # More lines than the cell had paragraphs: append the extras.
             cell.add_paragraph(line)
@@ -1237,10 +1266,57 @@ def _set_table_cell_text(table, row_idx: int, col_idx: int, new_text: str) -> bo
     return True
 
 
+def _insert_paragraph_after_formatted(p, text: str):
+    """Insert a new paragraph right after ``p`` carrying the same paragraph
+    style and first-run formatting but with ``text`` as its content.
+
+    Used to turn ``\\n``-separated edit text into real paragraphs. Writing a
+    literal newline into a single run makes Word/LibreOffice render it as stray
+    whitespace, so the text that used to live in its own paragraph (e.g. a
+    "Conclusion" heading) ends up floating and mis-positioned.
+    """
+    new_el = copy.deepcopy(p._p)
+    p._p.addnext(new_el)
+    new_p = Paragraph(new_el, p._parent)
+    runs = new_p.runs
+    keep = runs[0] if runs else None
+    for r in runs[1:]:
+        r._r.getparent().remove(r._r)
+    if keep is not None:
+        _el_set_text(keep._r, text)
+    else:
+        new_p.add_run(text)
+    return new_p
+
+
+def _apply_paragraph_edit(p, new_text: str) -> None:
+    """Apply one paragraph edit, expanding ``\\n`` breaks into real paragraphs.
+
+    The rewriter brain and the multi-line paragraph textarea routinely produce
+    ``\\n``-separated text. Keeping that internal to one paragraph corrupts the
+    layout in the original document, so each line becomes its own paragraph,
+    sharing the target's paragraph style and run formatting.
+    """
+    lines = new_text.split("\n")
+    first = lines[0]
+    if _p_text(p) != first:
+        replace_paragraph_text_preserving_format(p, first, old_text=_p_text(p))
+    anchor = p
+    for line in lines[1:]:
+        anchor = _insert_paragraph_after_formatted(anchor, line)
+
+
 def update_docx_content(doc_path: str, output_path: str, edits: list) -> bool:
     """Apply paragraph and table-cell edits to a DOCX file, including run-level
     inline formatting (bold, italic, underline, color, font size), paragraph
     alignment, heading levels, and list styles.
+
+    Each edit is ``{"index": int, "text": str}`` for a body paragraph, or
+    ``{"table_index": int, "row": int, "col": int, "text": str}`` for a table
+    cell. Table edits used to be dropped on the floor because this function
+    only walked ``doc.paragraphs``, which is why table content could be read in
+    the editor but never written back. Paragraph edits that contain ``\\n`` are
+    expanded into separate paragraphs so the document keeps its structure.
     """
     try:
         doc = docx.Document(doc_path)
@@ -1250,11 +1326,12 @@ def update_docx_content(doc_path: str, output_path: str, edits: list) -> bool:
         for edit in edits or []:
             if not isinstance(edit, dict):
                 continue
+            text = re.sub(r"\r\n?", "\n", edit.get("text") or "")
             if edit.get("table_index") is not None:
                 cell_edits[edit["table_index"]] = cell_edits.get(edit["table_index"], {})
                 cell_edits[edit["table_index"]][(edit.get("row"), edit.get("col"))] = edit
             elif edit.get("index") is not None:
-                paragraph_edits[edit["index"]] = edit
+                paragraph_edits[edit["index"]] = {**edit, "text": text}
 
         for idx, p in enumerate(doc.paragraphs):
             if idx in paragraph_edits:
@@ -1300,8 +1377,8 @@ def update_docx_content(doc_path: str, output_path: str, edits: list) -> bool:
                             r.font.name = str(r_item["font_name"])
                         if r_item.get("highlight"):
                             _el_highlight_yellow(r._r)
-                elif new_text is not None and p.text != new_text:
-                    replace_paragraph_text_preserving_format(p, new_text, old_text=p.text)
+                elif new_text is not None and _p_text(p) != new_text:
+                    _apply_paragraph_edit(p, new_text)
 
                 # Alignment
                 if alignment:
@@ -1420,7 +1497,7 @@ def find_text_variants(doc_path: str, find_text: str, case_sensitive: bool = Tru
 
         groups = {}
         for loc, p in _collect_docx_paragraphs(doc):
-            text = p.text or ""
+            text = _p_text(p)
             for m in prefix_pattern.finditer(text):
                 variant = m.group(0)
                 g = groups.setdefault(variant, {"variant": variant, "count": 0, "locations": []})
@@ -1458,7 +1535,7 @@ def selective_replace_docx(
         count = 0
 
         for loc, p in _collect_docx_paragraphs(doc):
-            original = p.text or ""
+            original = _p_text(p)
             paragraph_count = 0
             for variant in variants:
                 escaped_tokens = [re.escape(tok) for tok in re.split(r"\s+", variant.strip()) if tok]
@@ -1466,7 +1543,7 @@ def selective_replace_docx(
                 start_b = r"\b" if (variant and (variant[0].isalnum() or variant[0] == "_")) else r"(?<!\w)"
                 end_b = r"\b" if (variant and (variant[-1].isalnum() or variant[-1] == "_")) else r"(?!\w)"
                 pattern = re.compile(start_b + escaped_variant + end_b, flags)
-                matches = list(pattern.finditer(p.text or ""))
+                matches = list(pattern.finditer(_p_text(p)))
                 for m in reversed(matches):
                     _replace_span(p, m.start(), m.end(), replace_text)
                     paragraph_count += 1
@@ -1476,7 +1553,7 @@ def selective_replace_docx(
                     "paragraph": loc["label"],
                     "index": loc.get("index"),
                     "old_text": original,
-                    "new_text": p.text,
+                    "new_text": _p_text(p),
                 })
 
         _save_docx_clean(doc, output_path)

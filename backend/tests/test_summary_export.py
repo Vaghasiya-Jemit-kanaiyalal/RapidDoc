@@ -217,3 +217,33 @@ def test_txt_export_cleans_markdown_syntax(client):
     assert "bold" in body
     assert "`inline_code`" not in body
     assert "inline_code" in body
+
+
+def test_non_ascii_title_uses_rfc5987_disposition(client):
+    """A title with accents must not 500 the export endpoint (the plain
+    f-string Content-Disposition used only latin-1). The RFC 5987 filename*
+    branch carries the real name."""
+    response = export(client, "txt", title="Résumé du pont")
+    assert response.status_code == 200, response.text
+    assert "filename*=UTF-8''" in response.headers["content-disposition"]
+    assert "Résumé du pont" in response.content.decode("utf-8")
+
+
+def test_title_falls_back_to_the_document_name(client):
+    """The document's display name (``doc["name"]``) precedes the upload
+    filename when no explicit title is given, so the summary is named after
+    what the user calls the document, not its original upload file."""
+    client.doc["name"] = "Merged Report"
+    response = export(client, "txt")
+    assert response.status_code == 200, response.text
+    assert "Merged_Report.txt" in response.headers["content-disposition"]
+    assert "Merged Report" in response.content.decode("utf-8")
+
+
+def test_a_summary_that_cleans_to_no_text_is_rejected(client):
+    """A summary whose markdown contains only an empty heading and a fence
+    would previously export as a 0-byte file; that is a failed conversion, not
+    a document worth handing to the user."""
+    response = export(client, "txt", summary="# \n```\n```")
+    assert response.status_code == 400
+    assert "no content" in response.json()["detail"].lower()

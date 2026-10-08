@@ -224,8 +224,7 @@ def _tidy_punctuation(text: str) -> str:
     # article onto it, turning "the .env file" into "the.env file".
     text = _DOTFILE.sub(
         lambda m: m.group(0).replace(".", _DOT_GUARD_PUNCT), text)
-    text = _MISSING_SPACE_AFTER_PUNCT.sub(r"\1 \2", text)
-    text = _SPACE_BEFORE_PUNCT.sub(r"\1", text)
+    # guard abbrs
     text = _SPACE_AFTER_OPEN.sub(r"\1", text)
     # Restore only at the very end: both space rules above match " ." and would
     # otherwise glue "the .env file" into "the.env file".

@@ -52,6 +52,9 @@ from RapidDoc.backend.app.services.summary_export import (
     SUPPORTED_FORMATS as SUPPORTED_SUMMARY_FORMATS,
     build_summary_bytes,
 )
+from RapidDoc.backend.app.services.document_ast import (
+    build_document_ast,
+)
 from RapidDoc.backend.app.models import (
     DocumentMetadata, ContentUpdateRequest, FindReplaceRequest, AICommandRequest,
     FindVariantsRequest, SelectiveReplaceRequest, HeaderFooterRequest, PipelineUpdateRequest,
@@ -2871,13 +2874,23 @@ async def rewrite_document_text_endpoint(
 ):
     """Rewrite a paragraph/block of the document using the local T5 brain
     (Gemini fallback), returning the rewritten text so the frontend can apply
-    it through the existing /content endpoint."""
+    it through the existing /content endpoint.
+
+    The ``text`` field in the request is ALWAYS treated as the authoritative
+    source when provided - even if ``index`` / ``page_num`` / ``block_no`` are
+    also present.  This prevents the model from silently pulling surrounding
+    paragraphs when the client already holds the correct block text.
+    """
     try:
         db = db_conn.get_db()
         doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
+        # --- 1. Resolve source text -----------------------------------------
+        # Priority: explicit `text` field >> document lookup by index/block.
+        # The frontend always passes the visible block text, so document lookup
+        # only runs as a last resort (e.g. API callers that don't have it).
         source_text = _explicit_text(request)
         source_label = "provided text"
         if not source_text:
@@ -2906,8 +2919,33 @@ async def rewrite_document_text_endpoint(
         if not source_text:
             raise HTTPException(status_code=400, detail="The target paragraph/block is empty; nothing to rewrite.")
 
+        # --- 2. Rewrite ------------------------------------------------------
         result = await run_in_threadpool(rewrite_text, request.instruction, source_text)
 
+        # --- 3. Output isolation guard ---------------------------------------
+        # If the model returned text that is much longer than the input (a sign
+        # it combined surrounding context into the output), truncate at a natural
+        # sentence boundary close to the original length rather than returning a
+        # garbled multi-paragraph blob.  The guard is generous (3x) to allow
+        # legitimate expansions (e.g. "make this more detailed").
+        rewritten = (result.get("rewritten_text") or "").strip()
+        if rewritten and len(rewritten) > len(source_text) * 3 + 200:
+            # Find the last sentence ending within 2x the input length
+            cutoff = len(source_text) * 2 + 200
+            tail = rewritten[:cutoff]
+            last_end = max(tail.rfind('. '), tail.rfind('! '), tail.rfind('? '))
+            if last_end > len(source_text) // 2:
+                rewritten = tail[:last_end + 1].strip()
+            else:
+                # No sentence boundary — fall back to the original text
+                rewritten = source_text
+            result["rewritten_text"] = rewritten
+            logger.warning(
+                "Rewrite output too long (%d chars for %d-char input); trimmed to %d chars.",
+                len(result.get("rewritten_text", "")), len(source_text), len(rewritten),
+            )
+
+        # --- 4. Persist history & return ------------------------------------
         current_date = datetime.now().strftime("%Y-%m-%d")
         db.documents.update_one(
             {"_id": ObjectId(doc_id)},
@@ -3123,7 +3161,7 @@ async def export_document_summary(
                        f"{', '.join(SUPPORTED_SUMMARY_FORMATS)}.",
             )
 
-        title = (request.title or doc.get("filename") or "Summary").strip()
+        title = (request.title or doc.get("name") or doc.get("filename") or "Summary").strip()
         payload = {
             "summary": request.summary,
             "key_points": request.key_points or [],
@@ -3139,6 +3177,13 @@ async def export_document_summary(
         except ValueError as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+        if not data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"The {fmt.upper()} conversion produced no content. "
+                       "Use a format that can represent white-space-only markdown.",
+            )
+
         db.documents.update_one(
             {"_id": ObjectId(doc_id)},
             {"$push": {"edit_history": {
@@ -3150,7 +3195,7 @@ async def export_document_summary(
         return Response(
             content=data,
             media_type=media_type,
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={"Content-Disposition": _content_disposition(filename)},
         )
     except HTTPException:
         raise
@@ -3162,3 +3207,25 @@ async def export_document_summary(
     except Exception as e:
         logger.error("Error in document summary export endpoint: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error while exporting the summary.")
+
+
+@router.get("/{doc_id}/ast")
+async def get_document_ast_endpoint(
+    doc_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Return the structured canonical JSON AST for this document."""
+    try:
+        db = db_conn.get_db()
+        doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        file_path = storage_service.get_file_path(doc["storage_path"])
+        ast = await run_in_threadpool(build_document_ast, file_path, doc["file_type"])
+        return {"status": "success", "ast": ast}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error generating document AST: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to parse document AST.")
+

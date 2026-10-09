@@ -633,8 +633,13 @@ INTENT_PROMPT = UNIVERSAL_INTENT_PROMPT
 
 
 REWRITE_PROMPT = """You are the text rewriting engine for RapidDoc, a document editing app.
-Rewrite the given text following the user's instruction. Keep the meaning identical.
-Return ONLY the rewritten text. Do not include explanations, quotes, or prefixes."""
+Rewrite ONLY the single provided text block following the user's instruction.
+CRITICAL CONSTRAINTS:
+1. Rewrite ONLY the exact text given below. Do NOT import, mention, or combine any content from other paragraphs, sections, or the rest of the document.
+2. Maintain the exact same paragraph structure. Do NOT combine multiple paragraphs, split into bullet points, or add section headings unless explicitly instructed.
+3. Keep core meaning, numbers, named entities, dates, and factual details intact while executing the requested transformation (e.g. simplifying, polishing, or changing tone).
+4. The output length should be similar to the input length. Responses more than 3x longer than the input are REJECTED as hallucinations.
+5. Return strictly the rewritten text and nothing else. No preamble, no labels like "Rewritten:", no markdown fences."""
 
 # Requests that mean "fix the grammar", not "rewrite this". The local T5 brain
 # paraphrases for CoEdIT-style prefixes, which is wrong for proofreading: it

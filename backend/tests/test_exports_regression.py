@@ -13,10 +13,17 @@ import zipfile
 import docx
 import fitz
 import pytest
+from docx.oxml.ns import qn
 
 from RapidDoc.backend.app.routers.documents import validate_file, verify_upload_bytes
+from RapidDoc.backend.app.services.docx_editor import (
+    get_docx_content, update_docx_content,
+)
 from RapidDoc.backend.app.services.export_service import (
     build_pptx_bytes, build_txt_bytes, build_docx_bytes,
+)
+from RapidDoc.backend.app.services.pdf_editor import (
+    _whiteout_and_write_text, update_pdf_content,
 )
 
 
@@ -210,3 +217,205 @@ def test_pptx_body_text_is_editable_text_not_one_picture(pdf_with_text):
         for paragraph in shape.text_frame.paragraphs:
             runs += sum(1 for run in paragraph.runs if run.text.strip())
     assert runs >= 5, "exported slides must contain selectable, editable text"
+
+
+# ---------------------------------------------------------------------------
+# Content edits written back into the document
+# ---------------------------------------------------------------------------
+
+def _docx_with_heading_body_and_table(tmp_path):
+    """Heading, body paragraph and a cell that the edit pipeline must keep in place."""
+    path = tmp_path / "structured.docx"
+    document = docx.Document()
+    heading = document.add_paragraph("Conclusion")
+    heading.style = document.styles["Heading 2"]
+    for run in heading.runs:
+        run.bold = True
+    document.add_paragraph("The findings of this phase are solid.")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(1, 1).text = "Owner A"
+    document.save(str(path))
+    return str(path)
+
+
+def test_multiline_paragraph_edit_becomes_real_paragraphs(tmp_path):
+    """The rewriter brain/multi-line textarea emit \\n-separated text.
+
+    Writing that literal string into one run made Word/LibreOffice render it as
+    stray whitespace, so edited text no longer stayed in its own paragraph
+    (e.g. a "Conclusion" heading that stopped being a heading). Each line must
+    become a real paragraph sharing the target's style, so the document keeps
+    its structure, and a table cell edit must stay inside its cell.
+    """
+    src = _docx_with_heading_body_and_table(tmp_path)
+    out = tmp_path / "edited.docx"
+
+    ok = update_docx_content(src, str(out), [
+        {"index": 1, "text": "The findings of this phase are solid.\nThey were verified twice.\nNo anomalies remain."},
+        {"table_index": 0, "row": 1, "col": 1, "text": "Owner A\nOwner B"},
+    ])
+    assert ok
+
+    document = docx.Document(str(out))
+    texts = [p.text for p in document.paragraphs]
+    assert texts == [
+        "Conclusion",
+        "The findings of this phase are solid.",
+        "They were verified twice.",
+        "No anomalies remain.",
+    ]
+    assert document.paragraphs[0].style.name == "Heading 2"
+    assert document.paragraphs[0].runs[0].bold is True
+    cell = document.tables[0].rows[1].cells[1]
+    assert [p.text for p in cell.paragraphs] == ["Owner A", "Owner B"]
+
+
+def test_single_line_paragraph_edit_stays_one_paragraph(tmp_path):
+    src = _docx_with_heading_body_and_table(tmp_path)
+    out = tmp_path / "edited.docx"
+
+    ok = update_docx_content(src, str(out), [
+        {"index": 1, "text": "The findings were verified twice."},
+    ])
+    assert ok
+
+    document = docx.Document(str(out))
+    assert [p.text for p in document.paragraphs] == [
+        "Conclusion",
+        "The findings were verified twice.",
+    ]
+    assert document.paragraphs[0].style.name == "Heading 2"
+
+
+# ---------------------------------------------------------------------------
+# Manual line breaks (<w:br/>) in paragraphs
+# ---------------------------------------------------------------------------
+
+def _docx_with_manual_line_break(tmp_path):
+    """A paragraph whose run carries a real <w:br/> soft line break."""
+    path = tmp_path / "linebreak.docx"
+    document = docx.Document()
+    document.add_paragraph("Results")
+    paragraph = document.add_paragraph()
+    run = paragraph.add_run("First line")
+    run.add_break()
+    run.add_text("Second line")
+    document.add_paragraph("Tail.")
+    document.save(str(path))
+    return str(path)
+
+
+def test_paragraph_with_manual_line_break_reads_a_newline(tmp_path):
+    """python-docx's ``.text`` drops <w:br/>, gluing "First line" and "Second
+    line" together in the editor; the reader must surface the break so the
+    user sees the real line structure before editing."""
+    src = _docx_with_manual_line_break(tmp_path)
+    items = get_docx_content(src)
+    assert items[1]["text"] == "First line\nSecond line"
+
+
+def test_editing_a_line_break_paragraph_becomes_real_paragraphs(tmp_path):
+    """Editing that paragraph into more lines expands the soft breaks into real
+    paragraphs (same rule as any multi-line edit) and leaves no phantom <w:br/>
+    behind in the rewritten ones."""
+    src = _docx_with_manual_line_break(tmp_path)
+    out = tmp_path / "edited.docx"
+
+    ok = update_docx_content(src, str(out), [
+        {"index": 1, "text": "First line\nSecond line updated\nThird line"},
+    ])
+    assert ok
+
+    document = docx.Document(str(out))
+    assert [p.text for p in document.paragraphs] == [
+        "Results",
+        "First line",
+        "Second line updated",
+        "Third line",
+        "Tail.",
+    ]
+    left_over = [br for p in document.paragraphs for br in p._p.iter(qn("w:br"))]
+    assert not left_over
+
+
+def test_untouched_line_break_paragraph_keeps_its_break(tmp_path):
+    """An edit to a different paragraph must not disturb an existing <w:br/>."""
+    src = _docx_with_manual_line_break(tmp_path)
+    out = tmp_path / "edited.docx"
+
+    ok = update_docx_content(src, str(out), [
+        {"index": 2, "text": "Tail status changed"},
+    ])
+    assert ok
+
+    document = docx.Document(str(out))
+    assert [p.text for p in document.paragraphs] == [
+        "Results",
+        "First line\nSecond line",
+        "Tail status changed",
+    ]
+    breaks = [br for p in document.paragraphs for br in p._p.iter(qn("w:br"))]
+    assert len(breaks) == 1
+
+
+# ---------------------------------------------------------------------------
+# PDF block edits: wrap + flow, and bbox fallback
+# ---------------------------------------------------------------------------
+
+def _pdf_with_text(tmp_path, text="Old text here", size=12.0):
+    path = tmp_path / "sample.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=420, height=500)
+    page.insert_text((50, 100), text, fontsize=size, fontname="helv")
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def test_pdf_whiteout_wraps_and_keeps_the_font_size(tmp_path):
+    """Replacing a block must write the full new text at the *original* font
+    size, wrapped to the box width and flowing downward - the old behaviour
+    shrank the font until it fit, which mangled a normal-length replacement."""
+    src = _pdf_with_text(tmp_path)
+    doc = fitz.open(src)
+    page = doc[0]
+    blocks = page.get_text("dict")["blocks"]
+    rect = fitz.Rect(blocks[0]["bbox"])
+
+    _whiteout_and_write_text(
+        page, rect,
+        "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota",
+        {"font": "helv", "size": 12.0, "color": (0.0, 0.0, 0.0)},
+    )
+
+    text = " ".join(page.get_text().split())
+    assert "Old text here" not in text
+    assert text == "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota"
+
+    spans = [
+        sp
+        for b in page.get_text("dict")["blocks"]
+        for line in b.get("lines", [])
+        for sp in line.get("spans", [])
+    ]
+    assert any(abs(sp["size"] - 12.0) < 0.05 for sp in spans)
+
+
+def test_pdf_edit_without_bbox_targets_the_right_block(tmp_path):
+    """A block edit that carries no bbox (legacy shape) must still land on the
+    right text - the writer re-derives the rect from block_no instead of
+    silently dropping the user's edit."""
+    src = _pdf_with_text(tmp_path)
+    out = tmp_path / "edited.pdf"
+
+    ok = update_pdf_content(src, str(out), [
+        {"page_num": 0, "blocks": [
+            {"block_no": 0, "text": "Replacement sentence goes here."},
+        ]},
+    ])
+    assert ok
+
+    with fitz.open(str(out)) as pdf:
+        text = pdf[0].get_text()
+    assert "Old text here" not in text
+    assert "Replacement sentence goes here." in " ".join(text.split())

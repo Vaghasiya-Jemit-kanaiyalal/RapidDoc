@@ -362,11 +362,50 @@ def _pick_block_style(doc, page_num: int, bbox) -> dict:
     return {"font": "helv", "size": 9.0, "color": (0.1, 0.1, 0.1)}
 
 
+_BASE14_FONT_NAMES = {
+    "tiro": "times-roman",
+    "helv": "helvetica",
+    "cour": "courier",
+}
+_BASE14_CODES = tuple(_BASE14_FONT_NAMES)
+
+
+def _wrap_to_fit(text: str, font, size: float, width: float) -> list:
+    """Greedily wrap text to `width` points for base-14 `font` at `size`.
+
+    Explicit newlines are preserved as hard line breaks; a single token wider
+    than the target width (long URLs, wide numbers) is placed on its own line
+    and allowed to overflow rather than being silently dropped.
+    """
+    lines = []
+    for paragraph in text.split("\n"):
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+        current = ""
+        for word in words:
+            candidate = word if not current else f"{current} {word}"
+            if not current or font.text_length(candidate, fontsize=size) <= width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
+
+
 def _whiteout_and_write_text(page, rect, text: str, style: dict):
     """Replace the region's content: redact the original glyphs, white-out,
     then write the new text using the detected formatting. No highlight is
     drawn — edits look native in the file; highlighting is preview-only.
-    Text is auto-shrunk until it fits."""
+
+    The replacement is added at the *original* font size, wrapped to the region
+    width and allowed to flow downward past the box when it is longer than what
+    was there. Auto-shrinking (the old behaviour) made a one-line edit of a long
+    paragraph render far smaller than the surrounding text, and made a multi-line
+    rewrite illegible; flowing keeps the edit legible and never drops text.
+    """
     # Physically remove the original glyphs inside the rect so re-extraction
     # returns the new text instead of a mix of old + new.
     try:
@@ -379,26 +418,34 @@ def _whiteout_and_write_text(page, rect, text: str, style: dict):
     if not text:
         return
 
-    size = style["size"]
-    font = style["font"]
-    color = style["color"]
-    while size >= 6.0:
-        rc = page.insert_textbox(
-            rect, text, fontsize=size, fontname=font, color=color, align=0, overlay=True
-        )
-        if rc >= 0:
-            return
-        size -= 0.5
-    # Last resort: baseline insert at the top-left corner (may overflow slightly
-    # but guarantees the text is written into the file).
-    page.insert_text(
-        (rect.x0, rect.y0 + 0.5),
-        text,
-        fontsize=size,
-        fontname=font,
-        color=color,
-        overlay=True,
-    )
+    size = min(28.0, max(6.0, float(style.get("size") or 9.0)))
+    font_code = style.get("font") if style.get("font") in _BASE14_CODES else "helv"
+    color = style.get("color") or (0.1, 0.1, 0.1)
+
+    try:
+        measure = fitz.Font(fontname=_BASE14_FONT_NAMES[font_code])
+    except Exception:
+        measure = fitz.Font(fontname="helvetica")
+
+    leading = size * 1.2
+    width = max(12.0, rect.width - 6.0)
+    page_bottom = page.rect.y1 - size
+    y = rect.y0 + size * 0.85
+
+    for line in _wrap_to_fit(text, measure, size, width):
+        if y > page_bottom:
+            logger.warning("Whiteout write clipped at page bottom (y=%.1f).", y)
+            break
+        if line:
+            page.insert_text(
+                (rect.x0, y),
+                line,
+                fontsize=size,
+                fontname=font_code,
+                color=color,
+                overlay=True,
+            )
+        y += leading
 
 
 def _join_spans(spans: list) -> str:
@@ -429,6 +476,29 @@ def _join_spans(spans: list) -> str:
         out.append(text)
         previous = span
     return "".join(out).strip()
+
+
+def _pdf_block_rect(page, block_no: int):
+    """Rect of the text block numbered ``block_no`` on ``page``, or None.
+
+    Numbering matches :func:`get_pdf_content` exactly: image blocks and blocks
+    with no text content are skipped and only counted text blocks advance the
+    counter. The `save` path re-derives geometry this way when an edit arrives
+    without a bbox - or with a bbox that went stale after an earlier rewrite -
+    instead of silently dropping the user's edit.
+    """
+    counter = -1
+    for b in page.get_text("dict")["blocks"]:
+        if b.get("type") != 0:
+            continue
+        spans = [sp for line in b.get("lines", []) for sp in line.get("spans", [])]
+        spans = [sp for sp in spans if sp.get("text")]
+        if not _join_spans(spans):
+            continue
+        counter += 1
+        if counter == block_no:
+            return fitz.Rect(b["bbox"])
+    return None
 
 
 def get_pdf_content(pdf_path: str) -> list:
@@ -1048,12 +1118,32 @@ def update_pdf_content(pdf_path: str, output_path: str, page_edits: list) -> boo
             page = doc[page_num]
             blocks = p_edit.get("blocks", [])
             for b_edit in blocks:
-                bbox = b_edit.get("bbox")
                 text = b_edit.get("text")
-                if bbox and text is not None:
-                    rect = fitz.Rect(bbox)
-                    style = _pick_block_style(doc, page_num, bbox)
-                    _whiteout_and_write_text(page, rect, text, style)
+                if text is None:
+                    continue
+
+                bbox = b_edit.get("bbox")
+                rect = None
+                if bbox:
+                    try:
+                        rect = fitz.Rect(bbox)
+                    except Exception:
+                        rect = None
+
+                # The preview may carry no bbox at all, or a stale one once a
+                # surrounding rewrite changed the page. Re-derive it from the
+                # live page before giving up on the edit.
+                if rect is None or rect.is_empty:
+                    rect = _pdf_block_rect(page, b_edit.get("block_no"))
+                    if rect is None:
+                        logger.warning(
+                            "Skipping PDF edit with no resolvable block (page %s, block %s).",
+                            page_num, b_edit.get("block_no"),
+                        )
+                        continue
+
+                style = _pick_block_style(doc, page_num, [rect.x0, rect.y0, rect.x1, rect.y1])
+                _whiteout_and_write_text(page, rect, text, style)
 
         _save_pdf(doc, output_path)
         doc.close()

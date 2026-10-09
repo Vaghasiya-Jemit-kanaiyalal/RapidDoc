@@ -489,7 +489,7 @@ def _attach_pictures(slides: list, file_path: str, file_type: str) -> list:
         if not parts:
             return slides
 
-        placeable = ("bullets", "section", "image")
+        placeable = ("bullets", "section", "image", "summary_cards", "two_column")
 
         def as_picture(part):
             return io.BytesIO(part["blob"]), (part.get("mime") or "image/png").split("/")[-1]
@@ -510,7 +510,7 @@ def _attach_pictures(slides: list, file_path: str, file_type: str) -> list:
 
         for part in unanchored:
             for slide in slides:
-                if slide.get("picture") or slide["layout"] != "bullets":
+                if slide.get("picture") or slide["layout"] not in ("bullets", "summary_cards", "two_column"):
                     continue
                 slide["picture"] = as_picture(part)
                 break

@@ -1374,6 +1374,7 @@ async def resize_document_images(
                 "unit": item.unit,
                 "keep_aspect": item.keep_aspect,
                 "anchor": item.anchor,
+                "new_page": getattr(item, "new_page", False),
             }
             for item in payload.items
         ]
@@ -1837,9 +1838,8 @@ async def ai_command_endpoint(
             bold = intent.get("bold")
             italic = intent.get("italic")
             color_rgb = intent.get("color_rgb")
-            target = intent.get("target", "all")
-
-            modified_count = await run_in_threadpool(
+            level = intent.get("level")
+            res = await run_in_threadpool(
                 style_docx_headings,
                 active_path,
                 active_path,
@@ -1848,14 +1848,18 @@ async def ai_command_endpoint(
                 bold=bold,
                 italic=italic,
                 color_rgb=color_rgb,
-                target=target,
+                level=level,
             )
+            modified_count = res.get("headings_modified", 0) if isinstance(res, dict) else (res or 0)
             current_date = datetime.now().strftime("%Y-%m-%d")
             desc_parts = []
             if font_size: desc_parts.append(f"{font_size}pt")
             if bold: desc_parts.append("bold")
             if italic: desc_parts.append("italic")
-            if color_rgb: desc_parts.append(f"color {color_rgb}")
+            if color_rgb:
+                color_name = intent.get("color") or f"RGB{color_rgb}"
+                desc_parts.append(color_name)
+            if font_name: desc_parts.append(font_name)
             desc = ", ".join(desc_parts) or "custom styling"
 
             db.documents.update_one(
@@ -1868,7 +1872,7 @@ async def ai_command_endpoint(
                 "action": "style_headings",
                 "engine": intent.get("engine"),
                 "count": modified_count,
-                "message": f"Done — updated styling on {modified_count} heading{'s' if modified_count != 1 else ''} ({desc}).",
+                "message": f"Done — styled {modified_count} heading{'s' if modified_count != 1 else ''} ({desc}).",
             }
 
         if action == "style_document":
@@ -2254,6 +2258,75 @@ async def ai_command_endpoint(
                 **resolution,
             }
 
+        if action == "resize_image":
+            if doc["file_type"] not in ("docx", "pdf"):
+                return {
+                    "status": "success",
+                    "action": "unknown",
+                    "engine": intent.get("engine"),
+                    "message": f"Image resizing is not supported for .{doc['file_type']} files.",
+                }
+            img_idx = intent.get("image_index", 0)
+            if isinstance(img_idx, str):
+                try:
+                    img_idx = int(img_idx)
+                except ValueError:
+                    img_idx = 0
+            width = intent.get("width")
+            height = intent.get("height")
+            unit = intent.get("unit", "px")
+            new_page = bool(intent.get("new_page", False))
+
+            if width is not None or height is not None or new_page:
+                active_path, version_fields = ensure_edited_version(
+                    doc, db, action=f"Image resize (image {img_idx + 1})"
+                )
+                resizes = [{
+                    "target_index": img_idx,
+                    "width": width,
+                    "height": height,
+                    "unit": unit,
+                    "keep_aspect": True,
+                    "anchor": "top_left",
+                    "new_page": new_page,
+                }]
+                if doc["file_type"] == "docx":
+                    outcome = await run_in_threadpool(
+                        resize_docx_images, active_path, active_path, resizes
+                    )
+                else:
+                    outcome = await run_in_threadpool(
+                        resize_pdf_images, active_path, active_path, resizes
+                    )
+
+                if outcome.get("ok"):
+                    current_date = datetime.now().strftime("%Y-%m-%d")
+                    db.documents.update_one(
+                        {"_id": ObjectId(doc_id)},
+                        {"$push": {"edit_history": {"date": current_date, "action": f"Resized image {img_idx + 1}"}},
+                         "$set": version_fields}
+                    )
+                    dim_str = ""
+                    if width and height: dim_str = f" to {width}x{height} {unit}"
+                    elif width: dim_str = f" to width {width} {unit}"
+                    elif height: dim_str = f" to height {height} {unit}"
+                    np_str = " (moved to new page)" if new_page else ""
+                    return {
+                        "status": "success",
+                        "action": "image_resized",
+                        "engine": intent.get("engine"),
+                        "image_index": img_idx,
+                        "message": f"Done — resized image {img_idx + 1}{dim_str}{np_str}.",
+                    }
+
+            return {
+                "status": "success",
+                "action": "resize_image",
+                "engine": intent.get("engine"),
+                "image_index": img_idx,
+                "message": f"Opening resize tool with 4-corner controls for image {img_idx + 1}.",
+            }
+
         if action == "describe_image":
             raw_bytes = None
             if request.image_base64:
@@ -2533,6 +2606,8 @@ async def ai_command_endpoint(
                         q_res = await run_in_threadpool(generate_mcqs, src, step.get("num_questions", 5))
                         final_mcq = q_res
                         reports.append(f"generated {len(q_res.get('questions', []))} MCQs")
+                elif s_action == "generate_presentation":
+                    reports.append("initiated presentation generation")
 
             combined_msg = "Done — " + ", ".join(reports) + "." if reports else "Processed multi-step command."
             return {
@@ -2542,6 +2617,18 @@ async def ai_command_endpoint(
                 "message": combined_msg,
                 "summary": final_summary.get("summary") if final_summary else None,
                 "questions": final_mcq.get("questions") if final_mcq else None,
+            }
+
+        if action == "generate_presentation":
+            theme = intent.get("theme") or "modern"
+            if theme not in ("modern", "corporate", "minimal"):
+                theme = "modern"
+            return {
+                "status": "success",
+                "action": "generate_presentation",
+                "theme": theme,
+                "engine": intent.get("engine", "universal"),
+                "message": f"Analyzing document structure and generating tailored presentation ({theme} theme)...",
             }
 
         return {

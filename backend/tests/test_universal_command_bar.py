@@ -104,3 +104,25 @@ def test_footer_and_rewrite_commands():
 
     res2 = understand_command("Rewrite the conclusion in a professional tone.")
     assert res2["action"] == "rewrite"
+
+
+def test_presentation_generation_commands():
+    # 1. Standard presentation command
+    res1 = understand_command("Generate a presentation from this document")
+    assert res1["action"] == "generate_presentation"
+    assert res1["theme"] == "modern"
+
+    # 2. Corporate theme
+    res2 = understand_command("Make a ppt in corporate theme")
+    assert res2["action"] == "generate_presentation"
+    assert res2["theme"] == "corporate"
+
+    # 3. Minimal slides
+    res3 = understand_command("Export to slides with clean minimal layout")
+    assert res3["action"] == "generate_presentation"
+    assert res3["theme"] == "minimal"
+
+    # 4. Convert document to presentation
+    res4 = understand_command("Turn this document into a pptx")
+    assert res4["action"] == "generate_presentation"
+

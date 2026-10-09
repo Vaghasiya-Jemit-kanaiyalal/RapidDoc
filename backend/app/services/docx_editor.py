@@ -679,6 +679,7 @@ def get_docx_image_parts(doc_path: str) -> list:
 # How a new image that does not match the old one's aspect ratio is handled.
 SIZE_MODE_FIT = "fit"        # scale down to fit inside the original box (default)
 SIZE_MODE_STRETCH = "stretch"  # keep the exact box, distorting if ratios differ
+SIZE_MODE_ORIGINAL = "original"  # render at native/original image dimensions
 
 
 def _drawing_extent(drawing):
@@ -770,6 +771,20 @@ def _fit_to_aspect(cx: int, cy: int, new_image):
     return new_cx, new_cy, True
 
 
+def _ensure_page_break_before_if_large(drawing, height_emu: int, force: bool = False):
+    """Place image paragraph on a new page if it exceeds available space or force is True."""
+    # Standard printable page height is ~9 inches (8.2M EMUs).
+    # If image exceeds ~5 inches (4.5M EMUs), or force is requested, break to a new page.
+    if force or (height_emu and height_emu > 4500000):
+        node = drawing
+        while node is not None and node.tag != qn("w:p"):
+            node = node.getparent()
+        if node is not None:
+            pPr = node.get_or_add_pPr()
+            if pPr.find(qn("w:pageBreakBefore")) is None:
+                pPr.append(OxmlElement("w:pageBreakBefore"))
+
+
 def _apply_docx_image_replacements(doc, replacements: list, size_mode: str = SIZE_MODE_FIT) -> list:
     """Swap the bytes behind specific images of an open Document.
 
@@ -855,12 +870,23 @@ def _apply_docx_image_replacements(doc, replacements: list, size_mode: str = SIZ
                 no_extent = True
                 continue
 
-            new_cx, new_cy, changed = (
-                _fit_to_aspect(cx, cy, new_image)
-                if size_mode == SIZE_MODE_FIT
-                else (cx, cy, False)
-            )
+            if size_mode in (SIZE_MODE_ORIGINAL, "original"):
+                try:
+                    orig_cx = int(new_image.width)
+                    orig_cy = int(new_image.height)
+                    max_page_cx = int(6.0 * 914400)
+                    if orig_cx > max_page_cx:
+                        orig_cy = max(1, int(orig_cy * (max_page_cx / orig_cx)))
+                        orig_cx = max_page_cx
+                    new_cx, new_cy, changed = orig_cx, orig_cy, True
+                except Exception:
+                    new_cx, new_cy, changed = _fit_to_aspect(cx, cy, new_image)
+            elif size_mode == SIZE_MODE_FIT:
+                new_cx, new_cy, changed = _fit_to_aspect(cx, cy, new_image)
+            else:
+                new_cx, new_cy, changed = (cx, cy, False)
             _fit_extents(drawing, new_cx, new_cy, drop_crop=True)
+            _ensure_page_break_before_if_large(drawing, new_cy)
             scaled = scaled or changed
 
         report["replaced"] = True
@@ -976,6 +1002,7 @@ def _apply_docx_image_resizes(doc, resizes: list) -> list:
                 )
                 if (new_cx, new_cy) != (old_cx, old_cy):
                     _fit_extents(drawing, new_cx, new_cy)
+                    _ensure_page_break_before_if_large(drawing, new_cy, force=bool(req.get("new_page")))
                     changed += 1
                 last = (old_cx, old_cy, new_cx, new_cy)
         except ResizeError as exc:
@@ -1071,6 +1098,7 @@ def apply_docx_styling(
     header_alignment: str = None,
     footer_alignment: str = None,
     doc_title: str = None,
+    line_spacing: float = None,
 ) -> bool:
     try:
         doc = docx.Document(doc_path)
@@ -1095,6 +1123,13 @@ def apply_docx_styling(
                                     run.font.name = font_name
                                 if font_size:
                                     run.font.size = Pt(font_size)
+
+        if line_spacing:
+            for paragraph in doc.paragraphs:
+                try:
+                    paragraph.paragraph_format.line_spacing = float(line_spacing)
+                except Exception:
+                    pass
 
         # 2. Update Header/Footer
         hf.apply_docx_headers_footers(
@@ -1638,8 +1673,16 @@ def style_docx_headings(
 
         for p in doc.paragraphs:
             lvl = _heading_level(p, _paragraph_style_name(p))
-            # If paragraph is Heading 1-6 or starts with heading style
-            is_heading = (lvl > 0) or (p.style.name and p.style.name.lower().startswith("heading"))
+            sname = (p.style.name or "").lower()
+            text_strip = p.text.strip()
+            # If paragraph is Heading 1-6 or starts with heading style or Title / Subtitle or manual heading
+            is_heading = (
+                (lvl > 0)
+                or sname.startswith("heading")
+                or sname in ("title", "subtitle")
+                or text_strip.startswith("#")
+                or (0 < len(text_strip) < 80 and p.runs and any(r.font.bold for r in p.runs if r.text.strip()))
+            )
             if is_heading:
                 if level is not None and lvl != level and lvl != 0:
                     continue

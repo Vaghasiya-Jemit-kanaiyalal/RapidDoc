@@ -229,6 +229,7 @@ def apply_pdf_styling(
     footer_alignment: str = None,
     doc_title: str = None,
     doc_filename: str = None,
+    line_spacing: float = None,
 ) -> bool:
     try:
         doc = _open_pdf(pdf_path)

@@ -147,7 +147,8 @@ UNIVERSAL_ACTIONS = {
     "replace", "header", "footer", "replace_image", "image_module",
     "style_headings", "style_document", "delete_column", "delete_row", "delete_table",
     "delete_image", "resize_image", "describe_image", "add_caption",
-    "summarize", "generate_mcq", "rewrite", "qa_extract", "composite"
+    "summarize", "generate_mcq", "rewrite", "qa_extract", "composite",
+    "generate_presentation"
 }
 
 
@@ -268,29 +269,43 @@ def _fallback_table_action(prompt: str) -> dict | None:
 
 def _fallback_heading_action(prompt: str) -> dict | None:
     p = prompt.strip()
-    if re.search(r"\bheadings?\b", p, re.I) and re.search(r"\b(?:change|make|set|style|format|update)\b", p, re.I):
-        color = None
-        color_rgb = None
-        for cname, rgb in COLOR_NAME_TO_RGB.items():
-            if re.search(rf"\b{re.escape(cname)}\b", p, re.I):
-                color = cname
-                color_rgb = rgb
-                break
-        
-        bold = True if re.search(r"\bbold\b", p, re.I) else None
-        italic = True if re.search(r"\bitalic\b", p, re.I) else None
-        
-        size = None
-        m_size = re.search(r"\b(\d+)\s*(?:px|pt)\b", p, re.I)
-        if m_size:
-            size = float(m_size.group(1))
-            
-        font_name = None
-        for fn in ("Arial", "Times New Roman", "Calibri", "Courier New", "Georgia", "Inter", "Verdana"):
-            if re.search(rf"\b{re.escape(fn)}\b", p, re.I):
-                font_name = fn
-                break
-                
+    # Support headings, headers, titles, subheadings, and typos like 'ahange' for 'change'
+    has_heading_target = bool(re.search(r"\b(?:headings?|headers?|titles?|subheadings?)\b", p, re.I))
+    if not has_heading_target:
+        return None
+
+    # Detect color
+    color = None
+    color_rgb = None
+    for cname, rgb in COLOR_NAME_TO_RGB.items():
+        if re.search(rf"\b{re.escape(cname)}\b", p, re.I):
+            color = cname
+            color_rgb = rgb
+            break
+
+    bold = True if re.search(r"\bbold\b", p, re.I) else None
+    italic = True if re.search(r"\bitalic\b", p, re.I) else None
+
+    size = None
+    m_size = re.search(r"\b(?:font[\s-]size|size)\s*(?:to\s*|:\s*)?(\d+(?:\.\d+)?)\s*(?:pt|px)?\b", p, re.I)
+    if not m_size:
+        m_size = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:pt|px)\b", p, re.I)
+    if m_size:
+        size = float(m_size.group(1))
+
+    font_name = None
+    for fn in ("Arial", "Times New Roman", "Calibri", "Courier New", "Georgia", "Inter", "Verdana", "Roboto", "Helvetica"):
+        if re.search(rf"\b{re.escape(fn)}\b", p, re.I):
+            font_name = fn
+            break
+
+    # If any styling attribute is recognized or styling verbs are used
+    if color or bold or italic or size or font_name:
+        level = None
+        m_lvl = re.search(r"\b(?:heading|header|h)\s*([1-6])\b", p, re.I)
+        if m_lvl:
+            level = int(m_lvl.group(1))
+
         return {
             "action": "style_headings",
             "color": color,
@@ -299,6 +314,43 @@ def _fallback_heading_action(prompt: str) -> dict | None:
             "italic": italic,
             "font_size": size,
             "font_name": font_name,
+            "level": level,
+            "engine": "rule",
+        }
+    return None
+
+
+def _fallback_document_styling_action(prompt: str) -> dict | None:
+    p = prompt.strip()
+    # If the user specifically targeted headings or headers, let _fallback_heading_action handle it
+    if re.search(r"\b(?:headings?|headers?|titles?|subheadings?)\b", p, re.I):
+        return None
+
+    font_name = None
+    for fn in ("Arial", "Times New Roman", "Calibri", "Courier New", "Georgia", "Inter", "Verdana", "Roboto", "Helvetica"):
+        if re.search(rf"\b{re.escape(fn)}\b", p, re.I):
+            font_name = fn
+            break
+
+    size = None
+    m_size = re.search(r"\b(?:font[\s-]size|size)\s*(?:to\s*|:\s*)?(\d+(?:\.\d+)?)\s*(?:pt|px)?\b", p, re.I)
+    if not m_size:
+        m_size = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:pt|px)\b", p, re.I)
+    if m_size:
+        size = float(m_size.group(1))
+
+    spacing = None
+    m_spacing = re.search(r"\bline[\s-]spacing\s*(?:to\s*|:\s*)?(\d+(?:\.\d+)?)\b", p, re.I)
+    if m_spacing:
+        spacing = float(m_spacing.group(1))
+
+    has_style_indicator = bool(re.search(r"\b(?:font|text|style|format|size|spacing|document)\b", p, re.I))
+    if (font_name or size or spacing) and (has_style_indicator or re.search(r"\b(?:change|ahange|chagne|make|set)\b", p, re.I)):
+        return {
+            "action": "style_document",
+            "font_name": font_name,
+            "font_size": size,
+            "line_spacing": spacing,
             "engine": "rule",
         }
     return None
@@ -310,7 +362,73 @@ def _fallback_image_action(prompt: str, has_image_upload: bool = False) -> dict 
         return {"action": "delete_image", "image_index": "all", "image_indexes": None, "engine": "rule"}
     if re.search(r"\b(?:describe|explain|what\s+is\s+in|read)\s+(?:this\s+)?(?:image|picture|photo|diagram|chart)\b", p, re.I):
         return {"action": "describe_image", "query": p, "engine": "rule"}
-    return None
+
+    # Image resize commands: "resize image 1 to 4 in", "make image 1 original size", "resize image"
+    if re.search(r"\b(?:resize|scale|enlarge|shrink|make\s+(?:the\s+)?image\s+(?:bigger|smaller|original(?:\s+size)?)|image\s+size|adjust\s+image)\b", p, re.I):
+        img_idx = 0
+        m_idx = re.search(r"\b(?:image|picture|photo)\s*(?:#|number\s*)?(\d+)\b", p, re.I)
+        if m_idx:
+            img_idx = max(0, int(m_idx.group(1)) - 1)
+        elif re.search(r"\bfirst\s+(?:image|picture|photo)\b", p, re.I):
+            img_idx = 0
+        elif re.search(r"\bsecond\s+(?:image|picture|photo)\b", p, re.I):
+            img_idx = 1
+        elif re.search(r"\bthird\s+(?:image|picture|photo)\b", p, re.I):
+            img_idx = 2
+
+        # Check unit
+        unit = "px"
+        if re.search(r"\b(?:in|inch|inches)\b", p, re.I):
+            unit = "in"
+        elif re.search(r"\bcm\b", p, re.I):
+            unit = "cm"
+        elif re.search(r"\bpt\b", p, re.I):
+            unit = "pt"
+        elif re.search(r"\bmm\b", p, re.I):
+            unit = "mm"
+
+        # Check width / height
+        width = None
+        height = None
+        m_w = re.search(r"\bwidth\s*(?:to\s*|:\s*)?(\d+(?:\.\d+)?)(?:\s*(?:in|inch|inches|px|cm|pt|mm))?", p, re.I)
+        if m_w:
+            width = float(m_w.group(1))
+        m_h = re.search(r"\bheight\s*(?:to\s*|:\s*)?(\d+(?:\.\d+)?)(?:\s*(?:in|inch|inches|px|cm|pt|mm))?", p, re.I)
+        if m_h:
+            height = float(m_h.group(1))
+
+        if width is None and height is None:
+            # Check for general size like "to 4 inches" or "to 400px" or "width 350"
+            m_size = re.search(r"\b(?:to|by|size)\s*(\d+(?:\.\d+)?)(?:\s*(?:in|inch|inches|px|cm|pt|mm))?", p, re.I)
+            if not m_size:
+                m_size = re.search(r"\b(\d+(?:\.\d+)?)\s*(?:in|inch|inches|px|cm|pt|mm)\b", p, re.I)
+            if m_size:
+                width = float(m_size.group(1))
+
+        new_page = bool(re.search(r"\b(?:new\s+page|page\s*break|next\s+page)\b", p, re.I))
+
+        return {
+            "action": "resize_image",
+            "image_index": img_idx,
+            "width": width,
+            "height": height,
+            "unit": unit,
+            "new_page": new_page,
+            "engine": "rule",
+        }
+
+    # Move image to new page
+    if re.search(r"\b(?:move|put|push)\s+(?:the\s+)?(?:image|picture|photo)(?:\s*#?\s*\d+)?\s*(?:to\s+)?(?:new\s+page|next\s+page)\b", p, re.I):
+        img_idx = 0
+        m_idx = re.search(r"\b(?:image|picture|photo)\s*(?:#|number\s*)?(\d+)\b", p, re.I)
+        if m_idx:
+            img_idx = max(0, int(m_idx.group(1)) - 1)
+        return {
+            "action": "resize_image",
+            "image_index": img_idx,
+            "new_page": True,
+            "engine": "rule",
+        }
 
 
 def _fallback_qa_action(prompt: str) -> dict | None:
@@ -320,21 +438,56 @@ def _fallback_qa_action(prompt: str) -> dict | None:
     return None
 
 
+FALLBACK_PPT_RE = re.compile(
+    r"\b(?:generate|create|make|export|convert|build|produce|design)\s+(?:to\s+|into\s+)?(?:a\s+|an\s+)?(?:presentation|ppt|pptx|slide\s*deck|slides|deck)\b|"
+    r"\b(?:presentation|ppt|pptx|slide\s*deck|slides)\s+(?:generation|generator|builder|maker)\b|"
+    r"\b(?:turn|transform)\s+(?:this\s+)?(?:doc|document|it)?\s*(?:in)?to\s+(?:a\s+)?(?:ppt|pptx|presentation|slides|deck)\b",
+    re.I
+)
+
+
+def _fallback_presentation_action(prompt: str) -> dict | None:
+    p = prompt.strip()
+    if FALLBACK_PPT_RE.search(p):
+        theme = "modern"
+        p_lower = p.lower()
+        if "corporate" in p_lower:
+            theme = "corporate"
+        elif "minimal" in p_lower or "clean" in p_lower:
+            theme = "minimal"
+        return {
+            "action": "generate_presentation",
+            "theme": theme,
+            "engine": "rule",
+        }
+    return None
+
+
 def _fallback_intent(prompt: str, has_image_upload: bool = False, selection: dict = None) -> dict:
     # 0. Direct exact replacement
     exact_repl = _extract_exact_replacement(prompt)
     if exact_repl:
         return exact_repl
 
+    # Presentation generation
+    ppt_act = _fallback_presentation_action(prompt)
+    if ppt_act:
+        return ppt_act
+
     # Table manipulation
     table_act = _fallback_table_action(prompt)
     if table_act:
         return table_act
 
-    # Heading styling
+    # Heading styling (handles "change all header to blue", "make headings bold", etc.)
     heading_act = _fallback_heading_action(prompt)
     if heading_act:
         return heading_act
+
+    # Document styling (handles "change font to Arial", "font size 12", etc.)
+    doc_style_act = _fallback_document_styling_action(prompt)
+    if doc_style_act:
+        return doc_style_act
 
     # Image actions
     img_act = _fallback_image_action(prompt, has_image_upload)
@@ -348,9 +501,17 @@ def _fallback_intent(prompt: str, has_image_upload: bool = False, selection: dic
 
     m = FALLBACK_HEADER_RE.search(prompt)
     if m:
-        val = m.group(1) or m.group(2)
+        val = (m.group(1) or m.group(2) or "").strip()
+        val_clean = val.lower().rstrip(".")
+        if val_clean in COLOR_NAME_TO_RGB:
+            return {
+                "action": "style_headings",
+                "color": val_clean,
+                "color_rgb": COLOR_NAME_TO_RGB[val_clean],
+                "engine": "rule",
+            }
         if val:
-            return {"action": "header", "new_text": val.strip()}
+            return {"action": "header", "new_text": val}
     m = FALLBACK_FOOTER_RE.search(prompt)
     if m:
         val = m.group(1) or m.group(2)
@@ -429,7 +590,7 @@ Supported Universal Actions:
 
 3. Heading styling:
    {"action": "style_headings", "font_size": 20, "bold": true, "italic": false, "color": "dark blue", "font_name": "Calibri", "level": null}
-   (Only include fields mentioned or implied; e.g. "make headings bold" -> {"action": "style_headings", "bold": true})
+   (Only include fields mentioned or implied; e.g. "make headings bold" -> {"action": "style_headings", "bold": true}; "change all header to blue" or "headers to red" -> {"action": "style_headings", "color": "blue"}. NOTE: "change header(s) to blue/red/green", "headers font 16" refers to HEADING styling, NOT page running header text).
 
 4. Document styling:
    {"action": "style_document", "font_name": "Times New Roman", "font_size": 12}
@@ -458,6 +619,10 @@ Supported Universal Actions:
        {"action": "style_headings", "bold": true},
        {"action": "summarize", "length": "5 points"}
    ]}
+
+9. Presentation & Slide Deck Generation:
+   {"action": "generate_presentation", "theme": "modern"|"corporate"|"minimal"}
+   (Use for commands requesting a presentation or slides, e.g. "generate a presentation", "make a ppt", "turn this document into slides", "create ppt in corporate theme")
 
 Rules:
 - Resolve references ("this", "it", "that", "the previous section") using the conversation history and current selection.

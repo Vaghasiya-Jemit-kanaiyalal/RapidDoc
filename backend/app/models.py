@@ -140,6 +140,8 @@ class ImageResizeItem(BaseModel):
     # Which point stays put when the box changes: "top_left" (a dragged corner)
     # or "center" (a dialog that grows the picture about its middle).
     anchor: str = "top_left"
+    # When True or when image cannot adjust on current page, forces paragraph onto a new page
+    new_page: Optional[bool] = False
 
 
 class ImageResizeRequest(BaseModel):

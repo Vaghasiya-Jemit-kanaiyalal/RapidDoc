@@ -17,7 +17,8 @@ import {
   RefreshCw, AlertTriangle, Save, Loader2, CheckCircle2,
   Send, ZoomIn, X, Wand2, History, ArrowRight, FileSignature, ArrowLeft,
   Sparkles, ListOrdered, Copy, Undo2, Redo2, ImageIcon, Paperclip, Ruler,
-  Layout, Table as TableIcon, Plus
+  Layout, Table as TableIcon, Plus, Maximize2, Minimize2, Check, CheckCheck,
+  FileCode, ListChecks
 } from 'lucide-react';
 
 const AI_STATUSES = [
@@ -522,6 +523,22 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
   const [aiReplaceText, setAiReplaceText] = useState('');
   const [aiChanges, setAiChanges] = useState([]); // [{paragraph, index, old_text, new_text}]
   const [aiSummary, setAiSummary] = useState(null); // {summary, source, engine, length}
+  const [summaryViewMode, setSummaryViewMode] = useState('executive'); // 'executive' | 'takeaways' | 'markdown'
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [summaryCopied, setSummaryCopied] = useState(false);
+  const [copiedPointIndex, setCopiedPointIndex] = useState(null);
+
+  const handleCopySummary = (textToCopy) => {
+    navigator.clipboard?.writeText(textToCopy || aiSummary?.summary || '');
+    setSummaryCopied(true);
+    setTimeout(() => setSummaryCopied(false), 2000);
+  };
+
+  const handleCopySinglePoint = (point, idx) => {
+    navigator.clipboard?.writeText(point);
+    setCopiedPointIndex(idx);
+    setTimeout(() => setCopiedPointIndex(null), 1500);
+  };
   const [commandHistory, setCommandHistory] = useState([]); // conversation memory for universal command bar
   const [activeSelection, setActiveSelection] = useState(null); // active selected text context
   const [selectionBubble, setSelectionBubble] = useState(null);
@@ -1576,6 +1593,17 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
         await fetchImageInventory();
         await refreshDoc();
         refreshFullPreview();
+      } else if (data.action === 'image_resized') {
+        setAiResult(data.message || 'Done — resized image.');
+        setViewMode('full');
+        await fetchContent();
+        await fetchImageInventory();
+        await refreshDoc();
+        refreshFullPreview();
+      } else if (data.action === 'resize_image') {
+        const targetIndex = data.image_index !== undefined ? data.image_index : 0;
+        await requestImageResize(targetIndex);
+        setAiResult(data.message || `Opened resize tool with 4-corner controls for image ${targetIndex + 1}.`);
       } else if (data.action === 'describe_image') {
         setAiSummary({
           summary: `# Image Analysis\n\n${data.description || data.message}`,
@@ -1641,6 +1669,10 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           setQuizPicks({});
           setQuizMode(false);
         }
+      } else if (data.action === 'generate_presentation') {
+        const themeToUse = data.theme || pptxTheme || 'modern';
+        setAiResult(data.message || `Generating presentation (${themeToUse} theme)...`);
+        await handleDownload('pptx', themeToUse);
       } else {
         setAiResult(data.message || 'I scanned your document. Try e.g. \'Change print to not print\' or \'Change the header to RapidDoc Report\'.');
       }
@@ -2926,8 +2958,17 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                                 imagePickInputRef.current?.click();
                               }}
                               className="flex-1 py-1 px-1.5 bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 text-[10px] font-semibold rounded-md border border-slate-200 transition text-center truncate"
+                              title="Upload picture replacement"
                             >
                               Upload
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setResizeTarget(img)}
+                              className="py-1 px-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded-md border border-indigo-200 transition"
+                              title="Resize with 4-corner controls and page placement"
+                            >
+                              Resize
                             </button>
                             <button
                               type="button"
@@ -3075,81 +3116,222 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
           )}
 
           {aiSummary && (
-            <div className="mb-2 rounded-2xl border border-indigo-200 bg-indigo-50/60 p-3">
-              <div className="flex items-start justify-between gap-2">
-                <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-                  Summary
-                  <span className="font-semibold text-slate-400">
-                    ({aiSummary.source}{aiSummary.length ? `, ${aiSummary.length}` : ''})
-                  </span>
-                </span>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => navigator.clipboard?.writeText(aiSummary.summary || '')}
-                    className="text-[10px] font-bold text-indigo-500 hover:text-indigo-700 flex items-center gap-1"
-                  >
-                    <Copy className="w-3 h-3" />
-                    Copy
-                  </button>
-                  {/* Keep the summary: exporting the text on screen rather than
-                      asking the server to summarise again, because a second pass
-                      would hand back different wording. */}
-                  {SUMMARY_FORMATS.map((fmt) => (
-                    <button
-                      key={fmt.value}
-                      type="button"
-                      disabled={summaryExporting === fmt.value}
-                      onClick={() => handleExportSummary(fmt.value)}
-                      title={`Download as ${fmt.label}`}
-                      className="text-[10px] font-bold text-indigo-500 hover:text-indigo-700 flex items-center gap-1 disabled:opacity-50"
-                    >
-                      {summaryExporting === fmt.value
-                        ? <Loader2 className="w-3 h-3 animate-spin" />
-                        : <Download className="w-3 h-3" />}
-                      {fmt.label}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAiSummary(null);
-                      setSummaryExportError('');
-                    }}
-                    title="Close summary"
-                    aria-label="Close summary"
-                    className="rounded-lg border border-indigo-200/80 bg-white/80 p-1 text-slate-400 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-600 transition ml-0.5"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-              {summaryExportError && (
-                <p className="mt-1.5 text-[10px] font-semibold text-red-600">
-                  {summaryExportError}
-                </p>
-              )}
-              {aiSummary.summary_source === 'conclusion' && !aiSummary.summary?.includes('## Conclusion') && (
-                <div className="mt-1.5 mb-2 rounded-xl bg-white/70 border border-indigo-100 px-2.5 py-2">
-                  <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-500 mb-1">
-                    From the conclusion
+            <div
+              className={
+                summaryExpanded
+                  ? "fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/60 backdrop-blur-md animate-in fade-in duration-200"
+                  : "mb-3"
+              }
+            >
+              <div
+                className={`rounded-3xl border border-indigo-200/90 bg-gradient-to-b from-white via-indigo-50/20 to-white shadow-xl shadow-indigo-100/50 backdrop-blur-xl flex flex-col transition-all duration-200 ${
+                  summaryExpanded
+                    ? "w-full max-w-4xl max-h-[90vh] p-5 sm:p-6 border-indigo-300 shadow-2xl"
+                    : "p-4"
+                }`}
+              >
+                {/* Header Row */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5 pb-3 border-b border-indigo-100/80">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-md shadow-indigo-500/25 shrink-0">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs sm:text-sm font-extrabold text-slate-900 tracking-tight">
+                          AI Executive Summary
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100/80 text-indigo-700 border border-indigo-200/60 shadow-3xs">
+                          {aiSummary.source || 'whole document'}
+                          {aiSummary.length ? ` • ${aiSummary.length}` : ''}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5 text-[10.5px] font-medium text-slate-500 flex-wrap">
+                        {aiSummary.elapsed_seconds != null && (
+                          <span className="flex items-center gap-1 font-semibold text-slate-700">
+                            <span className="text-amber-500 font-bold">⚡</span> {aiSummary.elapsed_seconds}s
+                          </span>
+                        )}
+                        {aiSummary.chunks_processed != null && (
+                          <span>• <span className="font-semibold text-slate-700">{aiSummary.chunks_processed}</span> section{aiSummary.chunks_processed !== 1 ? 's' : ''}</span>
+                        )}
+                        {(aiSummary.characters_read || aiSummary.characters) && (
+                          <span>• <span className="font-semibold text-slate-700">{(aiSummary.characters_read || aiSummary.characters).toLocaleString()}</span> chars</span>
+                        )}
+                        <span className="hidden sm:inline text-emerald-600 font-bold">• 100% Complete Coverage</span>
+                      </div>
+                    </div>
                   </div>
-                  <ul className="space-y-1">
-                    {(aiSummary.key_points || []).map((point, i) => (
-                      <li
-                        key={i}
-                        className="text-[11px] leading-relaxed text-slate-700 flex gap-1.5"
+
+                  {/* Actions & Modes */}
+                  <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+                    {/* View Switcher */}
+                    <div className="flex items-center bg-slate-100/90 rounded-xl p-0.5 border border-slate-200/80 text-[10.5px] font-semibold text-slate-600 shadow-3xs">
+                      <button
+                        type="button"
+                        onClick={() => setSummaryViewMode('executive')}
+                        className={`px-2.5 py-1 rounded-lg transition ${
+                          summaryViewMode === 'executive'
+                            ? 'bg-white text-indigo-700 shadow-xs font-bold'
+                            : 'hover:text-slate-900'
+                        }`}
                       >
-                        <span className="text-indigo-400 font-bold shrink-0">•</span>
-                        <span>{point}</span>
-                      </li>
+                        Executive View
+                      </button>
+                      {(aiSummary.key_points || []).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSummaryViewMode('takeaways')}
+                          className={`px-2.5 py-1 rounded-lg transition ${
+                            summaryViewMode === 'takeaways'
+                              ? 'bg-white text-indigo-700 shadow-xs font-bold'
+                              : 'hover:text-slate-900'
+                          }`}
+                        >
+                          Key Takeaways ({(aiSummary.key_points || []).length})
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSummaryViewMode('markdown')}
+                        className={`px-2.5 py-1 rounded-lg transition ${
+                          summaryViewMode === 'markdown'
+                            ? 'bg-white text-indigo-700 shadow-xs font-bold'
+                            : 'hover:text-slate-900'
+                        }`}
+                      >
+                        Markdown
+                      </button>
+                    </div>
+
+                    {/* Copy Button */}
+                    <button
+                      type="button"
+                      onClick={() => handleCopySummary(aiSummary.summary)}
+                      className="px-2.5 py-1 rounded-lg text-xs font-bold bg-white text-indigo-600 hover:bg-indigo-50 border border-indigo-200/80 shadow-2xs transition flex items-center gap-1"
+                    >
+                      {summaryCopied ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700 font-bold">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-indigo-600" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+
+                    {/* Export Dropdown / Pills */}
+                    {SUMMARY_FORMATS.map((fmt) => (
+                      <button
+                        key={fmt.value}
+                        type="button"
+                        disabled={summaryExporting === fmt.value}
+                        onClick={() => handleExportSummary(fmt.value)}
+                        title={`Download summary as .${fmt.value}`}
+                        className="px-2 py-1 rounded-lg text-xs font-bold bg-white text-slate-700 hover:text-indigo-600 hover:border-indigo-300 border border-slate-200/80 shadow-2xs transition flex items-center gap-1 disabled:opacity-50"
+                      >
+                        {summaryExporting === fmt.value ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-indigo-600" />
+                        ) : (
+                          <Download className="w-3 h-3 text-slate-400" />
+                        )}
+                        <span>.{fmt.label}</span>
+                      </button>
                     ))}
-                  </ul>
+
+                    {/* Maximize Toggle */}
+                    <button
+                      type="button"
+                      onClick={() => setSummaryExpanded((prev) => !prev)}
+                      title={summaryExpanded ? "Minimize view" : "Maximize view"}
+                      className="p-1.5 rounded-lg border border-slate-200/80 bg-white text-slate-500 hover:text-indigo-600 hover:border-indigo-300 transition shadow-2xs"
+                    >
+                      {summaryExpanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                    </button>
+
+                    {/* Close */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAiSummary(null);
+                        setSummaryExportError('');
+                        setSummaryExpanded(false);
+                      }}
+                      title="Close summary"
+                      aria-label="Close summary"
+                      className="p-1.5 rounded-lg border border-slate-200/80 bg-white text-slate-400 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-600 transition shadow-2xs ml-0.5"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
-              )}
-              <div className="mt-2 text-slate-700 bg-white/90 rounded-2xl p-3.5 border border-indigo-100/90 shadow-2xs max-h-96 overflow-y-auto">
-                <MarkdownRenderer content={aiSummary.summary} />
+
+                {summaryExportError && (
+                  <p className="mt-2 text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-xl p-2 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                    <span>{summaryExportError}</span>
+                  </p>
+                )}
+
+                {/* Content View Modes */}
+                {summaryViewMode === 'takeaways' && (aiSummary.key_points || []).length > 0 ? (
+                  <div className={`mt-3 overflow-y-auto space-y-2 pr-1 ${summaryExpanded ? 'flex-1 max-h-[72vh]' : 'max-h-96'}`}>
+                    <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <ListChecks className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Key Takeaways & Findings</span>
+                    </div>
+                    {(aiSummary.key_points || []).map((point, i) => (
+                      <div
+                        key={i}
+                        className="group flex items-start justify-between gap-3 p-3 rounded-2xl bg-white border border-indigo-100/90 shadow-2xs hover:border-indigo-300 hover:shadow-xs transition"
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <span className="w-5 h-5 rounded-lg bg-indigo-50 border border-indigo-200/60 text-indigo-700 font-extrabold text-[10.5px] flex items-center justify-center shrink-0 mt-0.5">
+                            {i + 1}
+                          </span>
+                          <span className="text-xs sm:text-[12.5px] leading-relaxed text-slate-800 font-medium">
+                            {point}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleCopySinglePoint(point, i)}
+                          title="Copy this point"
+                          className="opacity-0 group-hover:opacity-100 transition p-1.5 rounded-lg bg-indigo-50 text-indigo-600 hover:bg-indigo-100 shrink-0"
+                        >
+                          {copiedPointIndex === i ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : summaryViewMode === 'markdown' ? (
+                  <div className={`mt-3 rounded-2xl bg-slate-900 border border-slate-800 p-4 font-mono text-[11px] leading-relaxed text-indigo-200 overflow-y-auto ${summaryExpanded ? 'flex-1 max-h-[72vh]' : 'max-h-96'}`}>
+                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-[10px] text-slate-400 font-bold">
+                      <span className="flex items-center gap-1">
+                        <FileCode className="w-3.5 h-3.5 text-indigo-400" /> Raw Markdown Source
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopySummary(aiSummary.summary)}
+                        className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-bold"
+                      >
+                        <Copy className="w-3 h-3" /> Copy Raw
+                      </button>
+                    </div>
+                    <pre className="whitespace-pre-wrap select-text">{aiSummary.summary}</pre>
+                  </div>
+                ) : (
+                  <div className={`mt-3 text-slate-800 bg-white rounded-2xl p-4 sm:p-5 border border-indigo-100/90 shadow-2xs overflow-y-auto ${summaryExpanded ? 'flex-1 max-h-[72vh]' : 'max-h-96'}`}>
+                    <MarkdownRenderer content={aiSummary.summary} />
+                  </div>
+                )}
               </div>
             </div>
           )}

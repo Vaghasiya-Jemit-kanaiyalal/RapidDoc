@@ -56,6 +56,15 @@ def _clean_markdown_to_plain_text(markdown_text: str) -> str:
                 plain_lines.append("-" * min(len(heading_content), 50))
             continue
 
+        # Strip blockquotes: >
+        if stripped.startswith(">"):
+            line = re.sub(r"^>\s*", "", stripped)
+
+        # Handle horizontal divider
+        if re.match(r"^[-*_]{3,}$", stripped):
+            plain_lines.append("-" * 40)
+            continue
+
         # Strip bold and italics: **bold** or *italic*
         cleaned_line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
         cleaned_line = re.sub(r"\*([^*]+)\*", r"\1", cleaned_line)
@@ -171,6 +180,14 @@ def build_summary_docx(payload: dict, title: str) -> bytes:
                 bullet_text = s[2:]
                 bullet_clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", bullet_text)
                 d.add_paragraph(bullet_clean, style="List Bullet")
+            elif s.startswith("> "):
+                quote_clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", s[2:])
+                p = d.add_paragraph(quote_clean)
+                p.paragraph_format.left_indent = Inches(0.25)
+                if p.runs:
+                    p.runs[0].italic = True
+            elif re.match(r"^[-*_]{3,}$", s):
+                continue
             else:
                 clean_text = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
                 p = d.add_paragraph(clean_text)

@@ -252,18 +252,59 @@ def summarize_single_chunk(chunk: DocumentChunk) -> str:
     return " ".join(sentences) if sentences else chunk.text[:200]
 
 
+def categorize_finding(finding: str) -> str:
+    """Assign an attractive, domain-relevant category label to an extracted quantitative finding."""
+    f_lower = finding.lower()
+    if re.search(r"\$\d|\b(?:cost|budget|revenue|saving|expense|operating cost)\b", f_lower):
+        return "Financial Impact"
+    if re.search(r"\b(?:ms|latency|response time|real-time)\b", f_lower):
+        return "Latency & Speed"
+    if re.search(r"\b(?:\d+%\s*packet loss|\bpacket loss\b|\berror\b|\breliability\b|\buptime\b|\bmessage loss\b)", f_lower):
+        return "Reliability & Quality"
+    if re.search(r"\b(?:\d+%\s*loss|\d+%\s*reduction|\d+%\s*drop|\d+%\s*increase|\d+%\s*growth|bandwidth|compression)\b", f_lower):
+        return "Optimization & Efficiency"
+    if re.search(r"\b(?:fps|frames? per second|throughput|records?|queries|tokens?|data frames)\b", f_lower):
+        return "Scale & Throughput"
+    if re.search(r"\b(?:audit|stress|test|sustained|capacity)\b", f_lower):
+        return "Audit & Stress Testing"
+    if re.search(r"\b(?:security|crypto|hsm|elliptic|signature|attack|token|auth)\b", f_lower):
+        return "Security & Integrity"
+    if re.search(r"\b(?:vehicles?|nodes?|fleet|users?|devices?|sensors?|hardware)\b", f_lower):
+        return "Deployment & Scope"
+    if re.search(r"\b(?:october|november|december|january|february|march|april|may|june|july|august|september|q[1-4]|20\d\d)\b", f_lower):
+        return "Timeline & Milestone"
+    if "%" in finding:
+        return "Efficiency Metric"
+    return "Key Finding"
+
+
 def synthesize_markdown_summary(
     doc_title: str,
     chunks: List[DocumentChunk],
     full_text: str,
     original_char_count: int,
     start_time: float,
+    length_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Reduce and synthesize intermediate chunk summaries into a cohesive, structured Markdown document."""
     # 1. Overview Synthesis (Context, main purpose from opening chunks)
     opening_text = chunks[0].text if chunks else full_text[:1200]
     overview_sentences = score_and_extract_key_sentences(opening_text, max_sentences=2)
     overview_paragraph = " ".join(overview_sentences) if overview_sentences else f"Comprehensive analysis of {doc_title}."
+
+    # Parse length hint for targeted bullet count or concise scope
+    target_points_count = 8
+    is_brief = False
+    if length_hint:
+        hint_str = str(length_hint).lower()
+        pt_match = re.search(r"\b(\d+)\s*(?:points?|bullets?|items?|takeaways?)\b", hint_str)
+        if pt_match:
+            target_points_count = max(2, min(15, int(pt_match.group(1))))
+        elif "brief" in hint_str or "short" in hint_str or "concise" in hint_str:
+            target_points_count = 4
+            is_brief = True
+        elif "detailed" in hint_str or "full" in hint_str:
+            target_points_count = 10
 
     # 2. Key Points Synthesis (Distributed across beginning, middle, and later parts of the document)
     key_points: List[str] = []
@@ -280,10 +321,10 @@ def synthesize_markdown_summary(
                 seen_points.add(norm)
                 key_points.append(p_clean)
 
-    # Cap key points at 8 distinct points spanning the document
-    if len(key_points) > 8:
+    # Cap key points at targeted points count spanning the document
+    if len(key_points) > target_points_count:
         # Sample evenly across document chunks
-        indices = [int(i * (len(key_points) - 1) / 7) for i in range(8)]
+        indices = [int(i * (len(key_points) - 1) / (target_points_count - 1)) for i in range(target_points_count)]
         key_points = [key_points[i] for i in sorted(set(indices))]
 
     # 3. Key Findings, Metrics, & Dates across the document
@@ -307,7 +348,7 @@ def synthesize_markdown_summary(
         f"# Document Summary: {doc_title}",
         "",
         "## Overview",
-        overview_paragraph,
+        f"> **Executive Brief**: {overview_paragraph}",
         "",
         "## Key Points",
     ]
@@ -317,11 +358,13 @@ def synthesize_markdown_summary(
 
     if metrics_and_dates:
         md_lines.append("## Important Findings & Metrics")
-        for finding in metrics_and_dates[:6]:
-            md_lines.append(f"- **Key Detail**: {finding}")
+        max_metrics = 4 if is_brief else 6
+        for finding in metrics_and_dates[:max_metrics]:
+            cat = categorize_finding(finding)
+            md_lines.append(f"- **{cat}**: {finding}")
         md_lines.append("")
 
-    if len(section_breakdowns) > 1:
+    if len(section_breakdowns) > 1 and not is_brief:
         md_lines.append("## Section Highlights")
         for title, s_sum in section_breakdowns:
             md_lines.append(f"- **{title}**: {s_sum}")
@@ -393,6 +436,7 @@ def generate_complete_document_summary(
         full_text=cleaned,
         original_char_count=original_char_count,
         start_time=start_time,
+        length_hint=length_hint,
     )
 
     logger.info(

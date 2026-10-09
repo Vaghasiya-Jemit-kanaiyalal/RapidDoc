@@ -1,0 +1,2270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RapidDoc: Complete System Architecture, Features & Presentation Guide</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0a0f1d;
+      --bg-secondary: #111827;
+      --bg-card: #162032;
+      --bg-card-hover: #1c2a42;
+      --border-color: #243552;
+      --border-light: #2e4468;
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --brand-blue: #3b82f6;
+      --brand-indigo: #6366f1;
+      --brand-cyan: #06b6d4;
+      --brand-purple: #8b5cf6;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --accent-glow: rgba(59, 130, 246, 0.15);
+      --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --card-radius: 16px;
+      --badge-radius: 9999px;
+    }
+
+    [data-theme="light"] {
+      --bg-primary: #f8fafc;
+      --bg-secondary: #ffffff;
+      --bg-card: #ffffff;
+      --bg-card-hover: #f1f5f9;
+      --border-color: #e2e8f0;
+      --border-light: #cbd5e1;
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #94a3b8;
+      --brand-blue: #2563eb;
+      --brand-indigo: #4f46e5;
+      --brand-cyan: #0891b2;
+      --brand-purple: #7c3aed;
+      --accent-emerald: #059669;
+      --accent-amber: #d97706;
+      --accent-rose: #e11d48;
+      --accent-glow: rgba(37, 99, 235, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      transition: background-color 0.3s ease, color 0.3s ease;
+      overflow-x: hidden;
+    }
+
+    /* Container & Layout */
+    .app-container {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sticky Sidebar */
+    .sidebar {
+      width: 320px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 24px 18px;
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+      flex-shrink: 0;
+    }
+
+    .brand-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .brand-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--brand-blue), var(--brand-purple));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+    }
+
+    .brand-title h1 {
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #fff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    [data-theme="light"] .brand-title h1 {
+      background: linear-gradient(135deg, #0f172a 0%, #334155 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-subtitle {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .sidebar-search {
+      position: relative;
+      margin-bottom: 20px;
+    }
+
+    .sidebar-search input {
+      width: 100%;
+      padding: 10px 14px 10px 36px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      color: var(--text-primary);
+      font-size: 0.85rem;
+      font-family: inherit;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    .sidebar-search input:focus {
+      border-color: var(--brand-blue);
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+    }
+
+    .sidebar-search svg {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      width: 16px;
+      height: 16px;
+    }
+
+    .nav-group-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      font-weight: 700;
+      margin: 16px 0 8px 8px;
+    }
+
+    .nav-links {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      list-style: none;
+    }
+
+    .nav-links a {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+
+    .nav-links a:hover, .nav-links a.active {
+      color: var(--brand-blue);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    [data-theme="light"] .nav-links a:hover, [data-theme="light"] .nav-links a.active {
+      background: #eff6ff;
+    }
+
+    .nav-links a svg {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding-top: 18px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .theme-toggle-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: var(--text-secondary);
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .theme-toggle-btn:hover {
+      background: var(--bg-card-hover);
+      color: var(--text-primary);
+    }
+
+    /* Main Content Area */
+    .main-content {
+      flex: 1;
+      padding: 40px 60px;
+      max-width: 1200px;
+      overflow-y: auto;
+    }
+
+    @media (max-width: 1024px) {
+      .sidebar {
+        display: none;
+      }
+      .main-content {
+        padding: 24px 20px;
+      }
+    }
+
+    /* Hero Banner */
+    .hero-banner {
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%);
+      border: 1px solid var(--border-color);
+      border-radius: var(--card-radius);
+      padding: 40px;
+      margin-bottom: 40px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    }
+
+    [data-theme="light"] .hero-banner {
+      background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+    }
+
+    .hero-banner::after {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -20%;
+      width: 450px;
+      height: 450px;
+      background: radial-gradient(circle, rgba(99, 102, 241, 0.2) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      color: var(--brand-blue);
+      padding: 5px 12px;
+      border-radius: var(--badge-radius);
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+
+    .hero-title {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+      margin-bottom: 16px;
+    }
+
+    .hero-desc {
+      font-size: 1.15rem;
+      color: var(--text-secondary);
+      max-width: 860px;
+      line-height: 1.7;
+      margin-bottom: 24px;
+    }
+
+    .hero-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .hero-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .hero-pill svg {
+      width: 16px;
+      height: 16px;
+      color: var(--brand-cyan);
+    }
+
+    /* Section Headers */
+    .section-wrap {
+      margin-bottom: 60px;
+      scroll-margin-top: 40px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+      border-bottom: 2px solid var(--border-color);
+      padding-bottom: 14px;
+    }
+
+    .section-header-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .section-number {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--brand-blue), var(--brand-indigo));
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1rem;
+      box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3);
+    }
+
+    .section-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .section-subtitle {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Cards & Grids */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    @media (max-width: 900px) {
+      .grid-2, .grid-3, .grid-4 {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--card-radius);
+      padding: 24px;
+      transition: all 0.25s ease;
+      position: relative;
+    }
+
+    .card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-light);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+    }
+
+    .card-accent-top {
+      border-top: 3px solid var(--brand-blue);
+    }
+
+    .card-accent-emerald {
+      border-top: 3px solid var(--accent-emerald);
+    }
+
+    .card-accent-purple {
+      border-top: 3px solid var(--brand-purple);
+    }
+
+    .card-accent-amber {
+      border-top: 3px solid var(--accent-amber);
+    }
+
+    .card-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .card-icon-box {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 12px;
+    }
+
+    .icon-blue { background: rgba(59, 130, 246, 0.15); color: var(--brand-blue); }
+    .icon-emerald { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); }
+    .icon-purple { background: rgba(139, 92, 246, 0.15); color: var(--brand-purple); }
+    .icon-amber { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); }
+    .icon-rose { background: rgba(244, 63, 94, 0.15); color: var(--accent-rose); }
+    .icon-cyan { background: rgba(6, 182, 212, 0.15); color: var(--brand-cyan); }
+
+    .card-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .card-text {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: var(--badge-radius);
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-blue { background: rgba(59, 130, 246, 0.15); color: var(--brand-blue); border: 1px solid rgba(59, 130, 246, 0.3); }
+    .badge-purple { background: rgba(139, 92, 246, 0.15); color: var(--brand-purple); border: 1px solid rgba(139, 92, 246, 0.3); }
+    .badge-emerald { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-amber { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+    .badge-rose { background: rgba(244, 63, 94, 0.15); color: var(--accent-rose); border: 1px solid rgba(244, 63, 94, 0.3); }
+    .badge-cyan { background: rgba(6, 182, 212, 0.15); color: var(--brand-cyan); border: 1px solid rgba(6, 182, 212, 0.3); }
+
+    /* Tables */
+    .table-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--card-radius);
+      overflow-x: auto;
+      margin-bottom: 24px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.88rem;
+    }
+
+    thead {
+      background: rgba(15, 23, 42, 0.6);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    [data-theme="light"] thead {
+      background: #f1f5f9;
+    }
+
+    th {
+      padding: 14px 18px;
+      font-weight: 700;
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    td {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-color);
+      color: var(--text-primary);
+      vertical-align: top;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    tbody tr:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    [data-theme="light"] tbody tr:hover {
+      background: rgba(0, 0, 0, 0.02);
+    }
+
+    /* Visual Architecture Flowchart Box */
+    .flowchart-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--card-radius);
+      padding: 30px;
+      margin: 24px 0;
+      position: relative;
+    }
+
+    .flowchart-level {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 30px;
+      position: relative;
+    }
+
+    .flowchart-node {
+      background: var(--bg-secondary);
+      border: 2px solid var(--border-color);
+      border-radius: 12px;
+      padding: 16px 20px;
+      text-align: center;
+      min-width: 200px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      position: relative;
+      transition: all 0.2s;
+    }
+
+    .flowchart-node:hover {
+      border-color: var(--brand-blue);
+      transform: scale(1.02);
+    }
+
+    .flowchart-node.highlight-blue { border-color: var(--brand-blue); background: rgba(59, 130, 246, 0.05); }
+    .flowchart-node.highlight-purple { border-color: var(--brand-purple); background: rgba(139, 92, 246, 0.05); }
+    .flowchart-node.highlight-emerald { border-color: var(--accent-emerald); background: rgba(16, 185, 129, 0.05); }
+    .flowchart-node.highlight-amber { border-color: var(--accent-amber); background: rgba(245, 158, 11, 0.05); }
+
+    .node-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .node-sub {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .flowchart-arrow {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      color: var(--text-muted);
+      margin: -15px 0 15px 0;
+      font-size: 1.4rem;
+    }
+
+    /* Accordion / Collapsible Technical Details */
+    .accordion {
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      margin-bottom: 12px;
+      background: var(--bg-card);
+      overflow: hidden;
+    }
+
+    .accordion-header {
+      padding: 16px 20px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      user-select: none;
+      background: var(--bg-card);
+      transition: background 0.2s;
+    }
+
+    .accordion-header:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .accordion-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .accordion-title {
+      font-weight: 700;
+      font-size: 1rem;
+    }
+
+    .accordion-chevron {
+      transition: transform 0.2s ease;
+      color: var(--text-muted);
+    }
+
+    .accordion.open .accordion-chevron {
+      transform: rotate(180deg);
+    }
+
+    .accordion-content {
+      padding: 0 20px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s cubic-bezier(0, 1, 0, 1), padding 0.3s ease;
+      background: rgba(15, 23, 42, 0.2);
+      border-top: 1px solid transparent;
+    }
+
+    .accordion.open .accordion-content {
+      padding: 20px;
+      max-height: 2000px;
+      border-top-color: var(--border-color);
+      transition: max-height 0.5s ease-in-out, padding 0.3s ease;
+    }
+
+    /* Code & JSON blocks */
+    pre {
+      background: #090d16;
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 16px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      color: #38bdf8;
+      line-height: 1.5;
+      margin: 12px 0;
+    }
+
+    [data-theme="light"] pre {
+      background: #1e293b;
+      color: #38bdf8;
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--brand-cyan);
+    }
+
+    [data-theme="light"] code {
+      background: #e2e8f0;
+      color: #0369a1;
+    }
+
+    /* Callout Boxes */
+    .callout {
+      padding: 18px 22px;
+      border-radius: 12px;
+      margin: 16px 0;
+      border-left: 4px solid var(--brand-blue);
+      background: rgba(59, 130, 246, 0.08);
+      font-size: 0.92rem;
+      line-height: 1.6;
+    }
+
+    .callout-emerald {
+      border-left-color: var(--accent-emerald);
+      background: rgba(16, 185, 129, 0.08);
+    }
+
+    .callout-amber {
+      border-left-color: var(--accent-amber);
+      background: rgba(245, 158, 11, 0.08);
+    }
+
+    .callout-purple {
+      border-left-color: var(--brand-purple);
+      background: rgba(139, 92, 246, 0.08);
+    }
+
+    .callout-title {
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    /* Q&A Cards (Viva Cheat Sheet) */
+    .qa-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 18px;
+      transition: border-color 0.2s;
+    }
+
+    .qa-card:hover {
+      border-color: var(--brand-indigo);
+    }
+
+    .qa-question {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .qa-q-badge {
+      background: var(--brand-indigo);
+      color: #fff;
+      font-size: 0.75rem;
+      font-weight: 800;
+      padding: 2px 8px;
+      border-radius: 6px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .qa-answer {
+      font-size: 0.92rem;
+      color: var(--text-secondary);
+      line-height: 1.7;
+      padding-left: 36px;
+    }
+
+    .qa-answer strong {
+      color: var(--text-primary);
+    }
+
+    .key-takeaway {
+      background: rgba(99, 102, 241, 0.1);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-top: 10px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--brand-cyan);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Filter Toolbar */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+
+    .filter-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      padding: 6px 14px;
+      border-radius: var(--badge-radius);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .filter-btn:hover, .filter-btn.active {
+      background: var(--brand-blue);
+      border-color: var(--brand-blue);
+      color: #fff;
+    }
+
+    /* Print Styles */
+    @media print {
+      .sidebar, .theme-toggle-btn, .filter-bar, .sidebar-search {
+        display: none !important;
+      }
+      .main-content {
+        padding: 0 !important;
+        max-width: 100% !important;
+      }
+      body {
+        background: #fff !important;
+        color: #000 !important;
+      }
+      .card, .table-container, .qa-card, .hero-banner {
+        border: 1px solid #ccc !important;
+        background: #fff !important;
+        box-shadow: none !important;
+        break-inside: avoid;
+      }
+      pre {
+        background: #f4f4f4 !important;
+        color: #000 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div class="app-container">
+
+  <!-- ==================== STICKY NAVIGATION SIDEBAR ==================== -->
+  <aside class="sidebar">
+    <div class="brand-header">
+      <div class="brand-icon">📄</div>
+      <div class="brand-title">
+        <h1>RapidDoc</h1>
+        <div class="brand-subtitle">Project & Architecture Guide</div>
+      </div>
+    </div>
+
+    <div class="sidebar-search">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+      <input type="text" id="guideSearchInput" placeholder="Quick search features..." oninput="handleGlobalSearch(this.value)">
+    </div>
+
+    <nav style="flex: 1; overflow-y: auto;">
+      <div class="nav-group-title">Overview & Pitches</div>
+      <ul class="nav-links">
+        <li><a href="#summary"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> 1. Executive Summary</a></li>
+        <li><a href="#elevator-pitch"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg> 2. Explaining to Someone</a></li>
+      </ul>
+
+      <div class="nav-group-title">Architecture & Mechanics</div>
+      <ul class="nav-links">
+        <li><a href="#system-architecture"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg> 3. High-Level Architecture</a></li>
+        <li><a href="#what-works-on-what"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg> 4. What Works on What</a></li>
+        <li><a href="#ai-cascade"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path></svg> 5. 3-Tier AI Cascade</a></li>
+        <li><a href="#six-modules"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg> 6. Six System Modules</a></li>
+      </ul>
+
+      <div class="nav-group-title">Features & Deep Dives</div>
+      <ul class="nav-links">
+        <li><a href="#intents-taxonomy"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path></svg> 7. 24 Intents Taxonomy</a></li>
+        <li><a href="#feature-catalog"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg> 8. Feature Catalog (16 Tools)</a></li>
+        <li><a href="#data-flow"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> 9. End-to-End Data Flow</a></li>
+        <li><a href="#ml-training"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg> 10. Model Training & Data</a></li>
+      </ul>
+
+      <div class="nav-group-title">Exam & Interview Prep</div>
+      <ul class="nav-links">
+        <li><a href="#viva-questions"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> 11. Viva & Reviewer Q&A</a></li>
+        <li><a href="#tech-specs"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"></path></svg> 12. Tech Specs & Config</a></li>
+      </ul>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button class="theme-toggle-btn" onclick="toggleTheme()">
+        <span id="themeIcon">☀️</span> <span id="themeLabel">Light Mode</span>
+      </button>
+      <button class="theme-toggle-btn" onclick="window.print()" title="Print or save as PDF">
+        🖨️ Print
+      </button>
+    </div>
+  </aside>
+
+  <!-- ==================== MAIN CONTENT AREA ==================== -->
+  <main class="main-content">
+
+    <!-- HERO HEADER -->
+    <header class="hero-banner">
+      <div class="hero-tag">⚡ System Dossier & Knowledge Base</div>
+      <h1 class="hero-title">RapidDoc: AI Document Editor & Comprehension Platform</h1>
+      <p class="hero-desc">
+        A complete guide explaining how <strong>RapidDoc</strong> bridges natural language understanding with deterministic OpenXML & PDF document engineering. Learn how every component interacts, which feature runs on what engine, and how to confidently explain this architecture to examiners, interviewers, or clients.
+      </p>
+      <div class="hero-pills">
+        <div class="hero-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"></path></svg> Zero Format Loss Guarantee</div>
+        <div class="hero-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> 3-Tier AI Fallback Cascade</div>
+        <div class="hero-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg> 4 Fine-Tuned Local Brain Models</div>
+        <div class="hero-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg> Cross-Run XML Coalescing</div>
+      </div>
+    </header>
+
+    <!-- SECTION 1: EXECUTIVE SUMMARY -->
+    <section id="summary" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">1</div>
+          <div>
+            <h2 class="section-title">Executive Summary</h2>
+            <div class="section-subtitle">What RapidDoc is and the fundamental technical problem it solves</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-accent-top">
+          <div class="card-icon-box icon-rose">⚠️</div>
+          <h3 class="card-title">The "LLM Document Problem" (Why Traditional AI Fails)</h3>
+          <p class="card-text">
+            If you upload a Microsoft Word (<code>.docx</code>) or PDF document to ChatGPT, Claude, or Gemini and ask it to <em>"make all headings blue"</em> or <em>"replace the author name"</em>, the LLM will dump back plain text or raw markdown.
+          </p>
+          <ul style="margin: 12px 0 0 20px; font-size: 0.88rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Layout Destruction:</strong> Embedded tables, fonts, header/footer links, and margins are wiped out.</li>
+            <li><strong>Media Loss:</strong> Corporate logos, figures, and charts vanish completely.</li>
+            <li><strong>Unverifiable Hallucination:</strong> An LLM might change numbers, dates, or rewrite unrelated paragraphs without notice.</li>
+          </ul>
+        </div>
+
+        <div class="card card-accent-emerald">
+          <div class="card-icon-box icon-emerald">💡</div>
+          <h3 class="card-title">The RapidDoc Solution (Separation of NLU & Execution)</h3>
+          <p class="card-text">
+            RapidDoc strictly separates <strong>Natural Language Understanding (NLU)</strong> from <strong>Document DOM Execution</strong>.
+          </p>
+          <ul style="margin: 12px 0 0 20px; font-size: 0.88rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>AI acts only as a Parser:</strong> The AI identifies the <em>Intent</em> (e.g. <code>replace_text</code>) and extracts the <em>Slots</em> (e.g. <code>old_text="Draft"</code>, <code>new_text="Final"</code>).</li>
+            <li><strong>Deterministic Code Modifies the File:</strong> A low-level OpenXML/DOM engine modifies the exact XML nodes, preserving 100% of the fonts, tables, styles, headers, and media.</li>
+            <li><strong>Yellow Run Highlights:</strong> Edits are highlighted in yellow so the user can see exactly what changed before accepting.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout callout-purple" style="margin-top: 24px;">
+        <div class="callout-title">
+          <span>🎯 Core Value Proposition</span>
+        </div>
+        <p>
+          RapidDoc gives users the convenience of talking to their documents in conversational English (e.g., <em>"Change footer to 'Page {PAGE}'"</em>, <em>"Summarize Section 2"</em>, <em>"Make 5 MCQs for student revision"</em>, <em>"Export as Modern PowerPoint"</em>) while guaranteeing that the underlying document remains an authentic, professional, formatting-preserved Word or PDF document.
+        </p>
+      </div>
+    </section>
+
+    <!-- SECTION 2: HOW TO EXPLAIN RAPIDDOC -->
+    <section id="elevator-pitch" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">2</div>
+          <div>
+            <h2 class="section-title">How to Explain RapidDoc to Someone Else</h2>
+            <div class="section-subtitle">Choose the pitch depending on how much time you have with your listener</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="card card-accent-top">
+          <div class="badge badge-blue" style="margin-bottom: 12px;">⚡ 30-Second Pitch</div>
+          <h3 class="card-title">Quick Elevator Pitch</h3>
+          <p class="card-text" style="font-style: italic;">
+            "RapidDoc is an intelligent AI document editor. Instead of manually clicking through Word or losing formatting when pasting into ChatGPT, you type instructions in plain English like 'replace the logo', 'change headers', or 'make 5 quiz questions'. Our system uses local AI models and a deterministic OpenXML engine to modify your actual Word or PDF files with zero loss of formatting, tables, or layout."
+          </p>
+          <div class="key-takeaway" style="margin-top: 16px;">
+            <span>💡 Target: Casual introductions, quick demos.</span>
+          </div>
+        </div>
+
+        <div class="card card-accent-purple">
+          <div class="badge badge-purple" style="margin-bottom: 12px;">⏱️ 2-Minute Pitch</div>
+          <h3 class="card-title">Technical Viva / Interview Pitch</h3>
+          <p class="card-text">
+            "Most AI document tools fail because LLMs destroy document layouts. RapidDoc solves this through a <strong>Dual-Brain & 3-Tier Cascade</strong> architecture.
+            <br><br>
+            When a user enters a command, our fine-tuned <strong>DistilBERT classifier</strong> identifies what they want across 24 intents, and extracts parameters like page numbers, target text, or fonts.
+            <br><br>
+            Then, instead of asking an LLM to regenerate the document, our <strong>Deterministic DOCX/PDF Engine</strong> opens the underlying XML DOM, performs run coalescing to fix fragmented text, and updates the file directly. For generative tasks like summarization and MCQs, we host fine-tuned <strong>T5 and BART models locally</strong>, backed up by Google Gemini as a fallback cascade."
+          </p>
+          <div class="key-takeaway" style="margin-top: 16px;">
+            <span>💡 Target: College professors, technical recruiters.</span>
+          </div>
+        </div>
+
+        <div class="card card-accent-emerald">
+          <div class="badge badge-emerald" style="margin-bottom: 12px;">🎓 5-Minute Pitch</div>
+          <h3 class="card-title">Full Engineering Walkthrough</h3>
+          <p class="card-text">
+            "RapidDoc is an enterprise-grade document editing platform built with FastAPI, React, and PyTorch. It features <strong>six specialized modules</strong>:
+            <br><br>
+            <strong>1. Ingestion:</strong> Ingests DOCX, PDF, and TXT using PyMuPDF and python-docx.
+            <br>
+            <strong>2. NLU Router:</strong> Classifies user intent with DistilBERT and extracts slots via regex rules.
+            <br>
+            <strong>3. Deterministic DOM:</strong> Handles cross-run text replacement, table mutations, dynamic XML page numbering (<code>w:fldSimple</code>), and image resizing.
+            <br>
+            <strong>4. Local Brains:</strong> Runs T5-small for CoEdIT grammar rewriting, and BART-base for 4-option MCQs.
+            <br>
+            <strong>5. Analytics:</strong> Hierarchical Map-Reduce summarization with late-section retention to prevent losing conclusions.
+            <br>
+            <strong>6. Output & Versions:</strong> Live side-by-side HTML preview, branded PowerPoint exports via LibreOffice, and 40-step undo/redo snapshot versioning."
+          </p>
+          <div class="key-takeaway" style="margin-top: 16px;">
+            <span>💡 Target: Final project defense, client presentations.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 3: SYSTEM ARCHITECTURE -->
+    <section id="system-architecture" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">3</div>
+          <div>
+            <h2 class="section-title">High-Level System Architecture</h2>
+            <div class="section-subtitle">Visual overview of how requests travel through the entire system</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flowchart-container">
+        <!-- Level 1: Frontend UI -->
+        <div class="flowchart-level">
+          <div class="flowchart-node highlight-blue" style="min-width: 480px;">
+            <div class="badge badge-blue" style="margin-bottom: 6px;">Client Layer (Frontend)</div>
+            <div class="node-title">React 18 + Vite + TailwindCSS + Framer Motion</div>
+            <div class="node-sub">DocumentWorkspace.jsx | UploadZone | HeaderFooterEditor | DiffReviewModal | SelectionBubble</div>
+          </div>
+        </div>
+
+        <div class="flowchart-arrow">⬇️ HTTP REST / Multipart / JWT Bearer Authorization</div>
+
+        <!-- Level 2: Backend API Gateway -->
+        <div class="flowchart-level">
+          <div class="flowchart-node highlight-purple" style="min-width: 480px;">
+            <div class="badge badge-purple" style="margin-bottom: 6px;">Backend API Gateway (FastAPI)</div>
+            <div class="node-title">FastAPI Asynchronous Web Engine (Uvicorn)</div>
+            <div class="node-sub">/routers/auth.py | /routers/documents.py | /routers/preview.py | /routers/ai.py</div>
+          </div>
+        </div>
+
+        <div class="flowchart-arrow">⬇️ Dispatches to 3-Tier AI Cascade & NLU Router</div>
+
+        <!-- Level 3: 3-Tier Cascade -->
+        <div class="flowchart-level">
+          <div class="flowchart-node highlight-emerald">
+            <div class="badge badge-emerald" style="margin-bottom: 6px;">Tier 1: Local Brains</div>
+            <div class="node-title">PyTorch / Transformers</div>
+            <div class="node-sub">DistilBERT Intent (24 classes)<br>T5 CoEdIT Rewriter<br>BART-base MCQ<br>BART Summarizer</div>
+          </div>
+
+          <div class="flowchart-node highlight-blue">
+            <div class="badge badge-blue" style="margin-bottom: 6px;">Tier 2: Cloud Fallback</div>
+            <div class="node-title">Google Gemini API</div>
+            <div class="node-sub">gemini-3.8-flash<br>Structured JSON Extraction<br>Complex multi-intent queries<br>Ambiguity resolution</div>
+          </div>
+
+          <div class="flowchart-node highlight-amber">
+            <div class="badge badge-amber" style="margin-bottom: 6px;">Tier 3: Rule Fallback</div>
+            <div class="node-title">Deterministic Regex</div>
+            <div class="node-sub">FALLBACK_HEADER_RE<br>REPLACE_RE<br>100% offline fail-safe<br>Never crashes</div>
+          </div>
+        </div>
+
+        <div class="flowchart-arrow">⬇️ Dispatches Action & Slots to Targeted Execution Engines</div>
+
+        <!-- Level 4: Execution Engines -->
+        <div class="flowchart-level">
+          <div class="flowchart-node">
+            <div class="node-title">⚙️ Deterministic DOCX</div>
+            <div class="node-sub">python-docx + OXML<br>Cross-Run replacement<br>Header/Footer unlinking<br>Dynamic {PAGE} fields</div>
+          </div>
+
+          <div class="flowchart-node">
+            <div class="node-title">📑 PDF Ingestion & Patch</div>
+            <div class="node-sub">PyMuPDF (fitz) + pdfplumber<br>Direct text coordinate patch<br>Lossless bounding box extraction</div>
+          </div>
+
+          <div class="flowchart-node">
+            <div class="node-title">📊 Slides & Conversion</div>
+            <div class="node-sub">python-pptx + Headless LibreOffice<br>Outline heading parser<br>Table overflow control</div>
+          </div>
+        </div>
+
+        <div class="flowchart-arrow">⬇️ State Persistence & Version Snapshots</div>
+
+        <!-- Level 5: Storage Layer -->
+        <div class="flowchart-level">
+          <div class="flowchart-node highlight-emerald" style="min-width: 250px;">
+            <div class="node-title">🍃 MongoDB Database</div>
+            <div class="node-sub">User accounts, JWT auth, document metadata, edit history timelines</div>
+          </div>
+          <div class="flowchart-node highlight-blue" style="min-width: 250px;">
+            <div class="node-title">💾 Local Storage & Version Store</div>
+            <div class="node-sub">Physical .docx/.pdf binaries, original files, v1..v40 snapshot rollback history</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 4: WHAT WORKS ON WHAT (MASTER MATRIX) -->
+    <section id="what-works-on-what" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">4</div>
+          <div>
+            <h2 class="section-title">"What Works on What" Master Matrix</h2>
+            <div class="section-subtitle">Exhaustive mapping of every Frontend Component ➔ API Endpoint ➔ Backend Service ➔ Model / Tech</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="filter-bar">
+        <button class="filter-btn active" onclick="filterMatrix('all', this)">All Features</button>
+        <button class="filter-btn" onclick="filterMatrix('ai', this)">AI & NLP Generation</button>
+        <button class="filter-btn" onclick="filterMatrix('edit', this)">Document DOM Editing</button>
+        <button class="filter-btn" onclick="filterMatrix('layout', this)">Media, Tables & Layout</button>
+        <button class="filter-btn" onclick="filterMatrix('export', this)">Export & Versioning</button>
+      </div>
+
+      <div class="table-container">
+        <table id="matrixTable">
+          <thead>
+            <tr>
+              <th>Feature Name</th>
+              <th>Frontend Component</th>
+              <th>API Endpoint</th>
+              <th>Backend Service</th>
+              <th>Core Engine / AI Model</th>
+              <th>Category</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-cat="ai">
+              <td><strong>Natural Language AI Command</strong><br><small style="color:var(--text-muted)">"Make headers blue", "Replace author name"</small></td>
+              <td><code>DocumentWorkspace.jsx</code><br>Prompt Input Box</td>
+              <td><code>POST /{doc_id}/ai-command</code></td>
+              <td><code>gemini_service.py</code><br><code>slot_extractor.py</code></td>
+              <td><span class="badge badge-purple">DistilBERT (24 intents)</span> ➔ <span class="badge badge-blue">Gemini 3.8</span> ➔ <span class="badge badge-amber">Regex</span></td>
+              <td><span class="badge badge-purple">AI</span></td>
+            </tr>
+
+            <tr data-cat="edit">
+              <td><strong>Cross-Run Find & Replace</strong><br><small style="color:var(--text-muted)">Replaces fragmented text with yellow highlight</small></td>
+              <td><code>DocumentWorkspace.jsx</code><br>Find/Replace Bar</td>
+              <td><code>POST /{doc_id}/find-replace</code></td>
+              <td><code>docx_editor.py</code></td>
+              <td><span class="badge badge-emerald">Deterministic DOM</span><br>python-docx run-level text coalescing</td>
+              <td><span class="badge badge-emerald">Edit</span></td>
+            </tr>
+
+            <tr data-cat="edit">
+              <td><strong>Multi-Section Header & Footer</strong><br><small style="color:var(--text-muted)">Dynamic page numbers, titles, date macros</small></td>
+              <td><code>HeaderFooterEditor.jsx</code><br>PageBand.jsx</td>
+              <td><code>GET /headers-footers</code><br><code>POST /header-footer</code></td>
+              <td><code>header_footer.py</code><br><code>docx_editor.py</code></td>
+              <td><span class="badge badge-emerald">python-docx OXML</span><br><code>w:fldSimple</code> + <code>w:headerReference</code> unlinking</td>
+              <td><span class="badge badge-emerald">Edit</span></td>
+            </tr>
+
+            <tr data-cat="ai">
+              <td><strong>Document Summarizer</strong><br><small style="color:var(--text-muted)">Executive summary, key bullets, late-section retention</small></td>
+              <td><code>DocumentWorkspace.jsx</code><br>Summarize Drawer</td>
+              <td><code>POST /{doc_id}/summarize</code></td>
+              <td><code>document_summarizer.py</code><br><code>local_models.py</code></td>
+              <td><span class="badge badge-purple">BART-large-cnn</span> (Hierarchical Map-Reduce)<br>or Gemini fallback</td>
+              <td><span class="badge badge-purple">AI</span></td>
+            </tr>
+
+            <tr data-cat="ai">
+              <td><strong>Assessment & MCQ Generation</strong><br><small style="color:var(--text-muted)">4-option MCQs, distractors, flashcards, viva questions</small></td>
+              <td><code>DocumentWorkspace.jsx</code><br>MCQ Modal</td>
+              <td><code>POST /{doc_id}/generate-mcq</code></td>
+              <td><code>mcq_generator.py</code><br><code>local_models.py</code></td>
+              <td><span class="badge badge-purple">BART-base (RACE dataset)</span><br>Beam search candidate scoring</td>
+              <td><span class="badge badge-purple">AI</span></td>
+            </tr>
+
+            <tr data-cat="ai">
+              <td><strong>Grammar & Tone Rewriting</strong><br><small style="color:var(--text-muted)">Tone shifts (formal, academic, simple), grammar fix</small></td>
+              <td><code>SelectionBubble.jsx</code><br>Floating Bubble</td>
+              <td><code>POST /{doc_id}/rewrite</code></td>
+              <td><code>text_polish.py</code><br><code>local_models.py</code></td>
+              <td><span class="badge badge-purple">T5-small (CoEdIT dataset)</span><br>Sentence-by-sentence run replacement</td>
+              <td><span class="badge badge-purple">AI</span></td>
+            </tr>
+
+            <tr data-cat="layout">
+              <td><strong>Interactive Table Operations</strong><br><small style="color:var(--text-muted)">Add/delete row, column, borders, cell styling</small></td>
+              <td><code>TableToolbar.jsx</code></td>
+              <td><code>POST /{doc_id}/tables/mutate</code></td>
+              <td><code>docx_editor.py</code></td>
+              <td><span class="badge badge-emerald">python-docx Table API</span><br>XML grid colSpan / rowSpan tracking</td>
+              <td><span class="badge badge-amber">Layout</span></td>
+            </tr>
+
+            <tr data-cat="layout">
+              <td><strong>Image Swap & Geometry Resize</strong><br><small style="color:var(--text-muted)">Replace images, adjust width/height, aspect ratio</small></td>
+              <td><code>ImageResizeDialog.jsx</code></td>
+              <td><code>POST /{doc_id}/replace-image</code><br><code>POST /{doc_id}/resize-image</code></td>
+              <td><code>image_resolver.py</code><br><code>image_geometry.py</code></td>
+              <td><span class="badge badge-emerald">OOXML ZIP Archive</span><br>rId image byte replacement + EMUs resizing</td>
+              <td><span class="badge badge-amber">Layout</span></td>
+            </tr>
+
+            <tr data-cat="layout">
+              <td><strong>Page Setup & Margins</strong><br><small style="color:var(--text-muted)">A4 / Letter, Portrait / Landscape, Narrow / Wide</small></td>
+              <td><code>PageSetupDialog.jsx</code></td>
+              <td><code>POST /{doc_id}/page-setup</code></td>
+              <td><code>docx_editor.py</code></td>
+              <td><span class="badge badge-emerald">python-docx Section API</span><br>Page orientation & margin Pt/Inches</td>
+              <td><span class="badge badge-amber">Layout</span></td>
+            </tr>
+
+            <tr data-cat="export">
+              <td><strong>PowerPoint (PPTX) Generation</strong><br><small style="color:var(--text-muted)">Transforms DOCX structure into Modern/Corp slides</small></td>
+              <td><code>DocumentWorkspace.jsx</code><br>Export Dropdown</td>
+              <td><code>GET /{doc_id}/export?format=pptx</code></td>
+              <td><code>ppt_templates.py</code><br><code>export_service.py</code></td>
+              <td><span class="badge badge-cyan">python-pptx Engine</span><br>Heading outline builder + table overflow control</td>
+              <td><span class="badge badge-cyan">Export</span></td>
+            </tr>
+
+            <tr data-cat="export">
+              <td><strong>Multi-Format PDF Export</strong><br><small style="color:var(--text-muted)">High-fidelity Word to PDF conversion</small></td>
+              <td><code>DocumentWorkspace.jsx</code><br>Download Button</td>
+              <td><code>GET /{doc_id}/export?format=pdf</code></td>
+              <td><code>export_service.py</code></td>
+              <td><span class="badge badge-cyan">LibreOffice Headless</span><br><code>soffice --headless --convert-to pdf</code></td>
+              <td><span class="badge badge-cyan">Export</span></td>
+            </tr>
+
+            <tr data-cat="export">
+              <td><strong>Version Snapshots & Undo/Redo</strong><br><small style="color:var(--text-muted)">40-version timeline with visual diff preview</small></td>
+              <td><code>DiffReviewModal.jsx</code><br>History Drawer</td>
+              <td><code>GET /{doc_id}/versions</code><br><code>POST /{version_id}/restore</code></td>
+              <td><code>version_history.py</code></td>
+              <td><span class="badge badge-cyan">Disk Copy-on-Write</span><br>Raw snapshot archiving + diff inspection</td>
+              <td><span class="badge badge-cyan">Export</span></td>
+            </tr>
+
+            <tr data-cat="edit">
+              <td><strong>Live Side-by-Side Preview</strong><br><small style="color:var(--text-muted)">Instant visual feedback of edits without Word</small></td>
+              <td><code>DocumentWorkspace.jsx</code><br>Right Preview Pane</td>
+              <td><code>POST /api/v1/preview</code></td>
+              <td><code>preview.py</code><br><code>pdf_converter.py</code></td>
+              <td><span class="badge badge-emerald">HTML/PyMuPDF Renderer</span><br>Renders pages into SVG/Canvas preview stream</td>
+              <td><span class="badge badge-emerald">Edit</span></td>
+            </tr>
+
+            <tr data-cat="export">
+              <td><strong>Authentication & Security</strong><br><small style="color:var(--text-muted)">JWT login, registration, password hashing</small></td>
+              <td><code>AuthSwitch.jsx</code><br><code>Login.jsx</code> / <code>Register.jsx</code></td>
+              <td><code>POST /auth/register</code><br><code>POST /auth/login</code></td>
+              <td><code>auth.py</code></td>
+              <td><span class="badge badge-blue">OAuth2 + Passlib Bcrypt</span><br>JWT Token (HS256) + MongoDB User Collection</td>
+              <td><span class="badge badge-cyan">Export</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SECTION 5: 3-TIER AI CASCADE -->
+    <section id="ai-cascade" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">5</div>
+          <div>
+            <h2 class="section-title">The 3-Tier AI Cascade & "Dual Brain" Hybrid Architecture</h2>
+            <div class="section-subtitle">Why RapidDoc uses three cascading layers instead of relying solely on an external API</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="card card-accent-emerald">
+          <div class="card-icon-box icon-emerald">💻</div>
+          <div class="badge badge-emerald" style="margin-bottom: 8px;">Tier 1: Primary Engine</div>
+          <h3 class="card-title">Local Fine-Tuned Models</h3>
+          <p class="card-text">
+            Four specialized lightweight transformer models running directly on CPU (or GPU) using HuggingFace & PyTorch.
+          </p>
+          <ul style="margin: 12px 0 0 16px; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Intent Model:</strong> <code>distilbert-base-uncased</code> fine-tuned on 8,400 examples across 24 intents.</li>
+            <li><strong>Text Rewriter:</strong> <code>T5-small</code> trained on the Grammarly CoEdIT dataset.</li>
+            <li><strong>MCQ Generator:</strong> <code>BART-base</code> fine-tuned on the RACE reading dataset.</li>
+            <li><strong>Summarizer:</strong> <code>BART-large-cnn</code> complete-document pipeline.</li>
+            <li><strong>Benefits:</strong> Zero API bills, zero internet dependency, completely private.</li>
+          </ul>
+        </div>
+
+        <div class="card card-accent-top">
+          <div class="card-icon-box icon-blue">☁️</div>
+          <div class="badge badge-blue" style="margin-bottom: 8px;">Tier 2: Intelligent Fallback</div>
+          <h3 class="card-title">Google Gemini 3.8 Flash</h3>
+          <p class="card-text">
+            Triggered automatically when the local intent confidence is below <code>INTENT_CONFIDENCE_THRESHOLD (0.15)</code> or for ambiguous inputs.
+          </p>
+          <ul style="margin: 12px 0 0 16px; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Role:</strong> Translates conversational, complex, or colloquial prompts into structured JSON.</li>
+            <li><strong>Output:</strong> Returns standardized action payloads (<code>{"action": "replace", "find_text": "...", "replace_text": "..."}</code>).</li>
+            <li><strong>Safety:</strong> Still never writes to the document directly; it only provides instructions to the deterministic engine.</li>
+          </ul>
+        </div>
+
+        <div class="card card-accent-amber">
+          <div class="card-icon-box icon-amber">🛡️</div>
+          <div class="badge badge-amber" style="margin-bottom: 8px;">Tier 3: Absolute Fail-Safe</div>
+          <h3 class="card-title">Deterministic Regex Engine</h3>
+          <p class="card-text">
+            Hard-coded heuristic rule patterns that run if both local models and cloud APIs fail (e.g., offline with no weights).
+          </p>
+          <ul style="margin: 12px 0 0 16px; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Patterns:</strong> Regexes for <code>FALLBACK_HEADER_RE</code>, replace syntax, and common formatting verbs.</li>
+            <li><strong>Guaranteed Uptime:</strong> Ensures core features (changing headers, find-and-replace, page setup) work 100% of the time.</li>
+            <li><strong>Zero Crashes:</strong> The application never throws a 500 error due to AI model downtime.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout callout-emerald" style="margin-top: 24px;">
+        <div class="callout-title">
+          <span>🔒 Thread Safety & Concurrency Control in Local Models</span>
+        </div>
+        <p>
+          Inside <code>local_models.py</code>, inference is guarded by a recursive lock (<code>_INFER_LOCK</code>) and model loading is protected by <code>_LOAD_LOCK</code>. Because PyTorch on CPU already saturates all available CPU cores with multi-threaded BLAS operations, serializing inference per request eliminates race conditions, prevents memory thrashing, and guarantees reproducible results without slowing down server throughput.
+        </p>
+      </div>
+    </section>
+
+    <!-- SECTION 6: SIX SYSTEM MODULES -->
+    <section id="six-modules" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">6</div>
+          <div>
+            <h2 class="section-title">The Six Core System Modules</h2>
+            <div class="section-subtitle">Deep dive into the modular responsibilities of the RapidDoc backend</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Module 1 -->
+      <div class="accordion open">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <div class="accordion-title-wrap">
+            <span class="badge badge-blue">Module 1</span>
+            <span class="accordion-title">Document Ingestion & Multi-Format Reconstruction Engine</span>
+          </div>
+          <span class="accordion-chevron">▼</span>
+        </div>
+        <div class="accordion-content">
+          <p><strong>Primary Files:</strong> <code>docx_editor.py</code>, <code>pdf_editor.py</code>, <code>pdf_converter.py</code>, <code>export_service.py</code></p>
+          <p style="margin-top: 8px;">
+            Parses multi-format input documents into an internal canonical tree representation (the <code>python-docx</code> Document Object Model) and handles clean serialization on export.
+          </p>
+          <div class="grid-2" style="margin-top: 14px;">
+            <div class="card" style="padding: 16px;">
+              <h4 style="font-size: 0.95rem; margin-bottom: 6px;">Supported Ingestion Formats</h4>
+              <ul style="font-size: 0.85rem; color: var(--text-secondary); margin-left: 18px;">
+                <li><code>.docx</code>: Direct structured XML parsing via <code>python-docx</code>.</li>
+                <li><code>.pdf</code>: Text runs, font sizes, bounding boxes via <code>PyMuPDF (fitz)</code> and <code>pdfplumber</code>.</li>
+                <li><code>.txt</code>: Normalized into paragraph blocks.</li>
+                <li><code>.pptx</code>: Outlines and slides parsed via <code>python-pptx</code>.</li>
+              </ul>
+            </div>
+            <div class="card" style="padding: 16px;">
+              <h4 style="font-size: 0.95rem; margin-bottom: 6px;">Export Pipeline</h4>
+              <ul style="font-size: 0.85rem; color: var(--text-secondary); margin-left: 18px;">
+                <li>Native DOCX and TXT serialization.</li>
+                <li>Headless LibreOffice integration (<code>soffice --headless --convert-to pdf</code>) for pixel-perfect PDF rendering with all styling and embedded fonts preserved.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Module 2 -->
+      <div class="accordion">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <div class="accordion-title-wrap">
+            <span class="badge badge-purple">Module 2</span>
+            <span class="accordion-title">NLU & Intent Classification Router</span>
+          </div>
+          <span class="accordion-chevron">▼</span>
+        </div>
+        <div class="accordion-content">
+          <p><strong>Primary Files:</strong> <code>slot_extractor.py</code>, <code>gemini_service.py</code>, <code>local_models.py</code></p>
+          <p style="margin-top: 8px;">
+            Maps arbitrary user natural language instructions to an unambiguous structured JSON payload.
+          </p>
+          <pre>{
+  "intent": "replace_text",
+  "confidence": 0.985,
+  "slots": {
+    "old_text": "Draft v2",
+    "new_text": "Final Submission",
+    "page": null
+  }
+}</pre>
+          <p style="font-size: 0.88rem; color: var(--text-secondary);">
+            The slot extractor uses deterministic entity parsing to capture parameters like <code>page</code>, <code>old_text</code>, <code>new_text</code>, <code>font_name</code>, <code>font_size</code>, <code>color</code>, and <code>alignment</code> without hallucinating values that were not in the user's prompt (the <em>Phantom Slot Fix</em>).
+          </p>
+        </div>
+      </div>
+
+      <!-- Module 3 -->
+      <div class="accordion">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <div class="accordion-title-wrap">
+            <span class="badge badge-emerald">Module 3</span>
+            <span class="accordion-title">Deterministic Document Execution Engine</span>
+          </div>
+          <span class="accordion-chevron">▼</span>
+        </div>
+        <div class="accordion-content">
+          <p><strong>Primary Files:</strong> <code>docx_editor.py</code>, <code>header_footer.py</code>, <code>image_geometry.py</code></p>
+          <p style="margin-top: 8px;">
+            Manipulates OpenXML nodes directly to guarantee zero hallucinations and format preservation.
+          </p>
+          <div class="callout callout-amber" style="margin-top: 10px;">
+            <div class="callout-title">🔍 The "Cross-Run Text Fragmentation" Problem & Solution</div>
+            <p style="font-size: 0.86rem;">
+              In Microsoft Word XML, a sentence like <em>"Hello World"</em> is rarely stored as a single string. It is often split across multiple <code>&lt;w:r&gt;&lt;w:t&gt;Hello &lt;/w:t&gt;&lt;/w:r&gt;&lt;w:r&gt;&lt;w:t&gt;World&lt;/w:t&gt;&lt;/w:r&gt;</code> run tags due to spellchecking or past edits. If you do a simple string replace on individual runs, the match fails!
+              <br><br>
+              <strong>RapidDoc's Solution:</strong> <code>docx_editor.py</code> implements a run-coalescing algorithm that combines text across run boundaries, performs the match, injects the replacement, and preserves adjacent formatting while tagging replaced runs with <code>&lt;w:highlight w:val="yellow"/&gt;</code> for visual diffing.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Module 4 -->
+      <div class="accordion">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <div class="accordion-title-wrap">
+            <span class="badge badge-purple">Module 4</span>
+            <span class="accordion-title">Local Neural Generation Engine (Seq2Seq Tasks)</span>
+          </div>
+          <span class="accordion-chevron">▼</span>
+        </div>
+        <div class="accordion-content">
+          <p><strong>Primary Files:</strong> <code>local_models.py</code>, <code>mcq_generator.py</code>, <code>text_polish.py</code></p>
+          <p style="margin-top: 8px;">
+            Executes targeted text transformations and educational generation using locally hosted Seq2Seq transformer models.
+          </p>
+          <ul style="margin: 10px 0 0 18px; font-size: 0.88rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Targeted Text Rewriter:</strong> Fine-tuned <code>T5-small</code> on the <code>grammarly/coedit</code> dataset (69k records). Understands instructions like <em>"make formal:"</em>, <em>"fix grammar:"</em>, <em>"simplify:"</em>.</li>
+            <li><strong>Educational Assessment Generator:</strong> Fine-tuned <code>BART-base</code> on the <code>ehovy/race</code> dataset (20k records). Generates 4-option multiple choice questions, plausible distractors, answer keys, explanations, flashcards, and viva examination questions.</li>
+            <li><strong>Beam Candidate Validation:</strong> Evaluates top 4 candidates from a single beam search tree, discarding malformed records and returning only valid questions.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Module 5 -->
+      <div class="accordion">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <div class="accordion-title-wrap">
+            <span class="badge badge-cyan">Module 5</span>
+            <span class="accordion-title">Pretrained & Unsupervised Document Analytics Engine</span>
+          </div>
+          <span class="accordion-chevron">▼</span>
+        </div>
+        <div class="accordion-content">
+          <p><strong>Primary Files:</strong> <code>document_summarizer.py</code>, <code>document_text.py</code>, <code>summary_export.py</code></p>
+          <p style="margin-top: 8px;">
+            Provides fast, offline document summarization, keyword extraction, and translation.
+          </p>
+          <div class="callout callout-emerald" style="margin-top: 10px;">
+            <div class="callout-title">📑 Map-Reduce Long-Document Summarization with Late-Section Retention</div>
+            <p style="font-size: 0.86rem;">
+              Standard BART models have a 1,024-token context window. Most document summarizers naively truncate after page 2, completely omitting conclusions, results, and recommendations!
+              <br><br>
+              <strong>RapidDoc's Solution:</strong>
+              1. <em>Complete Text Extraction & Cleaning</em> (preserving metrics and numbers via regex).<br>
+              2. <em>Heading & Boundary Detection</em> (Abstract, Methodology, Results, Conclusion).<br>
+              3. <em>Map Phase:</em> Summarizes each section chunk individually.<br>
+              4. <em>Reduce Phase:</em> Synthesizes section summaries into a master executive summary.<br>
+              5. <em>Late-Section Retention:</em> Guarantees terminal sections (Conclusions & Discussion) are weighted and included in the final output.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Module 6 -->
+      <div class="accordion">
+        <div class="accordion-header" onclick="toggleAccordion(this)">
+          <div class="accordion-title-wrap">
+            <span class="badge badge-amber">Module 6</span>
+            <span class="accordion-title">Backend Orchestration, Session Store & Presentation Engine</span>
+          </div>
+          <span class="accordion-chevron">▼</span>
+        </div>
+        <div class="accordion-content">
+          <p><strong>Primary Files:</strong> <code>main.py</code>, <code>database.py</code>, <code>version_history.py</code>, <code>ppt_templates.py</code>, <code>storage.py</code></p>
+          <p style="margin-top: 8px;">
+            Orchestrates sessions, state persistence, PowerPoint template generation, and version rollbacks.
+          </p>
+          <ul style="margin: 10px 0 0 18px; font-size: 0.88rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Session & Version History:</strong> 40-step snapshot timeline. Copies the raw document binary to disk before applying any mutation, allowing instant one-click rollback.</li>
+            <li><strong>Presentation Engine (PPTX):</strong> Uses an outline builder to turn document headings and table labels into branded PowerPoint slides with three themes (<code>Modern</code>, <code>Corporate</code>, <code>Minimal</code>) and overflow control (max 7 bullets, max 14 table rows per slide).</li>
+            <li><strong>MongoDB Persistence:</strong> Stores document metadata, ownership, pipeline progress stages (1: Ingested, 2: Header/Footer, 3: Content Editing, 4: Finalized), and user auth profiles.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 7: 24 INTENTS TAXONOMY -->
+    <section id="intents-taxonomy" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">7</div>
+          <div>
+            <h2 class="section-title">The 24 Natural Language Intent Taxonomy</h2>
+            <div class="section-subtitle">The complete list of 24 intent classes recognized by RapidDoc's fine-tuned DistilBERT model</div>
+          </div>
+        </div>
+      </div>
+
+      <p style="margin-bottom: 16px; font-size: 0.95rem; color: var(--text-secondary);">
+        The intent classifier was trained on 8,400 schema-validated records (280 examples per intent, split 80/10/10 into train/val/test). Here is the complete taxonomy and extracted slots:
+      </p>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Intent Name</th>
+              <th>Target Category</th>
+              <th>Extracted Slots</th>
+              <th>Sample User Instruction</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td><code>change_header</code></td><td>Formatting</td><td><code>page</code>, <code>target_text</code></td><td>"change the header on page 2 to Quarterly Report"</td></tr>
+            <tr><td>2</td><td><code>change_footer</code></td><td>Formatting</td><td><code>page</code>, <code>target_text</code></td><td>"set the footer to Confidential 2025"</td></tr>
+            <tr><td>3</td><td><code>change_title</code></td><td>Formatting</td><td><code>target_text</code></td><td>"rename the document title to Project Proposal"</td></tr>
+            <tr><td>4</td><td><code>change_font</code></td><td>Styling</td><td><code>page</code>, <code>font_name</code></td><td>"change the document font to Arial"</td></tr>
+            <tr><td>5</td><td><code>change_font_size</code></td><td>Styling</td><td><code>font_size</code>, <code>font_name</code></td><td>"make the text 12 pt with font Calibri"</td></tr>
+            <tr><td>6</td><td><code>replace_text</code></td><td>Editing</td><td><code>page</code>, <code>old_text</code>, <code>new_text</code></td><td>"replace 'Draft v1' with 'Final Version'"</td></tr>
+            <tr><td>7</td><td><code>insert_text</code></td><td>Editing</td><td><code>position</code>, <code>section</code>, <code>text</code></td><td>"insert New Paragraph at the top of Conclusion"</td></tr>
+            <tr><td>8</td><td><code>delete_paragraph</code></td><td>Editing</td><td><code>page</code></td><td>"delete the last paragraph on page 3"</td></tr>
+            <tr><td>9</td><td><code>insert_image</code></td><td>Media</td><td><code>position</code>, <code>image_name</code></td><td>"insert chart.png at the bottom of the page"</td></tr>
+            <tr><td>10</td><td><code>remove_image</code></td><td>Media</td><td><code>page</code>, <code>image_name</code></td><td>"remove the image figure1.jpg from the document"</td></tr>
+            <tr><td>11</td><td><code>replace_logo</code></td><td>Media</td><td><code>logo_name</code>, <code>new_logo</code></td><td>"replace company_logo.png with new_brand.png"</td></tr>
+            <tr><td>12</td><td><code>insert_page_number</code></td><td>Structure</td><td><code>position</code></td><td>"insert page numbers at the bottom center"</td></tr>
+            <tr><td>13</td><td><code>remove_page_number</code></td><td>Structure</td><td><em>none</em></td><td>"turn off all page numbering"</td></tr>
+            <tr><td>14</td><td><code>summarize_page</code></td><td>Analytics</td><td><code>page</code>, <code>length</code></td><td>"give a brief summary of page 2"</td></tr>
+            <tr><td>15</td><td><code>summarize_document</code></td><td>Analytics</td><td><code>length</code></td><td>"give me an executive summary of the entire document"</td></tr>
+            <tr><td>16</td><td><code>generate_mcq</code></td><td>Assessment</td><td><code>count</code></td><td>"generate 10 MCQs from the document"</td></tr>
+            <tr><td>17</td><td><code>generate_flashcards</code></td><td>Assessment</td><td><code>count</code></td><td>"create 20 flashcards from this content"</td></tr>
+            <tr><td>18</td><td><code>extract_keywords</code></td><td>Analytics</td><td><code>count</code></td><td>"extract 10 important keywords"</td></tr>
+            <tr><td>19</td><td><code>translate_section</code></td><td>Analytics</td><td><code>section</code>, <code>language</code></td><td>"translate the Conclusion to French"</td></tr>
+            <tr><td>20</td><td><code>check_grammar</code></td><td>Polishing</td><td><em>none</em></td><td>"proofread the document for grammar and tone"</td></tr>
+            <tr><td>21</td><td><code>change_language</code></td><td>Analytics</td><td><code>language</code></td><td>"translate the whole document to Spanish"</td></tr>
+            <tr><td>22</td><td><code>justify_text</code></td><td>Styling</td><td><em>none</em></td><td>"make all paragraphs fully justified"</td></tr>
+            <tr><td>23</td><td><code>add_bullets</code></td><td>Structure</td><td><code>section</code></td><td>"convert the methodology into bullet points"</td></tr>
+            <tr><td>24</td><td><code>generate_viva_questions</code></td><td>Assessment</td><td><code>count</code></td><td>"generate 5 viva voce questions with answers"</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SECTION 8: 16 CORE FEATURES CATALOG -->
+    <section id="feature-catalog" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">8</div>
+          <div>
+            <h2 class="section-title">Feature Catalog: Deep Dive into All 16 Tools</h2>
+            <div class="section-subtitle">Detailed breakdown of how each tool operates end-to-end</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <!-- Feature 1 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-purple">Tool 1: Natural Language Prompt Editor</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">AI Dispatcher</span>
+          </div>
+          <h3 class="card-title">Prompt-Driven Document Manipulation</h3>
+          <p class="card-text">
+            Users type any request into the chat command bar. The system routes through DistilBERT/Gemini, extracts target slots, matches against active paragraphs, and highlights modified runs in yellow.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>DocumentWorkspace.jsx</code> | <strong>Backend:</strong> <code>POST /{doc_id}/ai-command</code>
+          </div>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-emerald">Tool 2: Cross-Run Find & Replace</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Deterministic</span>
+          </div>
+          <h3 class="card-title">Run-Coalescing Find & Replace</h3>
+          <p class="card-text">
+            Handles fragmented XML strings across complex Word documents. Replaces matches across paragraphs and tables with yellow run-level highlighting and full change counts.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>DocumentWorkspace.jsx</code> | <strong>Backend:</strong> <code>POST /{doc_id}/find-replace</code>
+          </div>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-emerald">Tool 3: Header & Footer Manager</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">DOM Engine</span>
+          </div>
+          <h3 class="card-title">Multi-Section Header & Footer Editing</h3>
+          <p class="card-text">
+            Section-aware header and footer manipulation. Unlinks target sections from previous templates and inserts dynamic Word field codes (<code>PAGE</code>, <code>NUMPAGES</code>, <code>DATE</code>, <code>TITLE</code>).
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>HeaderFooterEditor.jsx</code> | <strong>Backend:</strong> <code>POST /{doc_id}/header-footer</code>
+          </div>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-purple">Tool 4: Hierarchical Summarizer</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Neural Seq2Seq</span>
+          </div>
+          <h3 class="card-title">Map-Reduce Document Summarization</h3>
+          <p class="card-text">
+            Generates executive summaries, bullet points, and section breakdowns. Uses late-section retention so conclusions on page 20 are never truncated. Exports directly to PDF/DOCX/MD.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> Summarize Drawer | <strong>Backend:</strong> <code>POST /{doc_id}/summarize</code>
+          </div>
+        </div>
+
+        <!-- Feature 5 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-purple">Tool 5: Assessment & MCQ Generator</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Educational AI</span>
+          </div>
+          <h3 class="card-title">Multiple Choice & Viva Generator</h3>
+          <p class="card-text">
+            Creates 4-option MCQs with distractors, correct answers, explanations, flashcards, and viva questions. Built using BART-base trained on the RACE dataset with beam-candidate validation.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> MCQ Generator Modal | <strong>Backend:</strong> <code>POST /{doc_id}/generate-mcq</code>
+          </div>
+        </div>
+
+        <!-- Feature 6 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-purple">Tool 6: Text Polish & Tone Rewriter</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">CoEdIT Engine</span>
+          </div>
+          <h3 class="card-title">Instruction-Guided Text Rewriting</h3>
+          <p class="card-text">
+            Select text in the editor to trigger tone shifts (formal, academic, simple, persuasive) or grammar fixing. Powered by T5-small fine-tuned on CoEdIT.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>SelectionBubble.jsx</code> | <strong>Backend:</strong> <code>POST /{doc_id}/rewrite</code>
+          </div>
+        </div>
+
+        <!-- Feature 7 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-amber">Tool 7: Table Mutation Toolbar</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Table DOM</span>
+          </div>
+          <h3 class="card-title">Interactive Table Manipulator</h3>
+          <p class="card-text">
+            Add rows, insert columns, delete cells, configure table borders, and apply background shading directly inside Word document tables.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>TableToolbar.jsx</code> | <strong>Backend:</strong> <code>POST /{doc_id}/tables/mutate</code>
+          </div>
+        </div>
+
+        <!-- Feature 8 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-amber">Tool 8: Image Geometry & Replacement</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Media Engine</span>
+          </div>
+          <h3 class="card-title">Embedded Image & Logo Swapping</h3>
+          <p class="card-text">
+            Deterministic index resolution (no hallucinated image swaps). Replace embedded images in the OOXML package archive, lock aspect ratios, and adjust width/height in EMUs.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>ImageResizeDialog.jsx</code> | <strong>Backend:</strong> <code>POST /{doc_id}/replace-image</code>
+          </div>
+        </div>
+
+        <!-- Feature 9 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-amber">Tool 9: Page Setup & Margins</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Layout Engine</span>
+          </div>
+          <h3 class="card-title">Document Margins & Orientation</h3>
+          <p class="card-text">
+            Change section margins (Normal, Narrow, Wide, Custom), paper sizes (A4, Letter, Legal), and page orientation (Portrait vs Landscape).
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>PageSetupDialog.jsx</code> | <strong>Backend:</strong> <code>POST /{doc_id}/page-setup</code>
+          </div>
+        </div>
+
+        <!-- Feature 10 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-cyan">Tool 10: PowerPoint Presentation Generator</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Slide Engine</span>
+          </div>
+          <h3 class="card-title">DOCX to PowerPoint (PPTX) Deck</h3>
+          <p class="card-text">
+            Converts document headings, bullet points, and tables into structured presentation slides using named templates (Modern, Corporate, Minimal) with table overflow protection.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> Export Menu | <strong>Backend:</strong> <code>GET /{doc_id}/export?format=pptx</code>
+          </div>
+        </div>
+
+        <!-- Feature 11 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-cyan">Tool 11: Diff Review & Rollback Modal</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Diff Engine</span>
+          </div>
+          <h3 class="card-title">Side-by-Side Diff Review Modal</h3>
+          <p class="card-text">
+            Inspect AI proposed changes side-by-side with additions in green and deletions in red before committing them to the document.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>DiffReviewModal.jsx</code> | <strong>Backend:</strong> <code>DocumentWorkspace</code> state
+          </div>
+        </div>
+
+        <!-- Feature 12 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-cyan">Tool 12: 40-Step Snapshot Version History</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Version Store</span>
+          </div>
+          <h3 class="card-title">Copy-on-Write Version Snapshots</h3>
+          <p class="card-text">
+            Captures the exact binary state of the document before every mutation. Provides a 40-step visual timeline for 1-click rollback without risk of metadata drift.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> History Drawer | <strong>Backend:</strong> <code>GET /{doc_id}/versions</code>
+          </div>
+        </div>
+
+        <!-- Feature 13 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-emerald">Tool 13: Live Document Preview Stream</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Renderer</span>
+          </div>
+          <h3 class="card-title">Real-Time Side-by-Side Preview</h3>
+          <p class="card-text">
+            Converts DOCX and PDF on the fly into high-fidelity canvas/HTML pages so users can review formatting live without Microsoft Word installed.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> Preview Pane | <strong>Backend:</strong> <code>POST /api/v1/preview</code>
+          </div>
+        </div>
+
+        <!-- Feature 14 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-emerald">Tool 14: Multi-Format Headless Export</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">LibreOffice</span>
+          </div>
+          <h3 class="card-title">DOCX, PDF & TXT Export Engine</h3>
+          <p class="card-text">
+            Streams exported documents natively or invokes LibreOffice headless (<code>soffice</code>) to render pixel-perfect PDF documents.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> Download Action | <strong>Backend:</strong> <code>GET /{doc_id}/export</code>
+          </div>
+        </div>
+
+        <!-- Feature 15 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-blue">Tool 15: Drag-and-Drop Ingestion Zone</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Ingestion</span>
+          </div>
+          <h3 class="card-title">Document Ingestion & Validation</h3>
+          <p class="card-text">
+            Validates file types (.docx, .pdf, .txt, .pptx), checks 10MB file ceilings, provisions MongoDB metadata records, and sets initial version 1 snapshots.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>UploadZone.jsx</code> | <strong>Backend:</strong> <code>POST /api/v1/documents/upload</code>
+          </div>
+        </div>
+
+        <!-- Feature 16 -->
+        <div class="card">
+          <div class="card-header">
+            <span class="badge badge-blue">Tool 16: Authentication & Security</span>
+            <span style="font-size: 0.8rem; color: var(--text-muted);">Auth Gateway</span>
+          </div>
+          <h3 class="card-title">OAuth2 JWT Authentication</h3>
+          <p class="card-text">
+            User registration and login using OAuth2 Password Bearer flow, passlib bcrypt password hashing, and signed JWT tokens with 60-minute expiration.
+          </p>
+          <div style="margin-top: 12px; font-size: 0.82rem; color: var(--text-muted);">
+            <strong>Frontend:</strong> <code>AuthSwitch.jsx</code> | <strong>Backend:</strong> <code>/api/v1/auth/*</code>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 9: DATA FLOW & END-TO-END WALKTHROUGH -->
+    <section id="data-flow" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">9</div>
+          <div>
+            <h2 class="section-title">End-to-End Data Flow & Lifecycle</h2>
+            <div class="section-subtitle">What happens when a user types a command? Step-by-step trace</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout callout-purple">
+        <div class="callout-title">🔄 Example Scenario: User types <em>"Replace 'Confidential Draft' with 'Approved Version' and change font to Arial"</em></div>
+        <ol style="margin: 12px 0 0 20px; font-size: 0.9rem; line-height: 1.8;">
+          <li><strong>Step 1 (UI Capture):</strong> User enters prompt in <code>DocumentWorkspace.jsx</code> and clicks Send. Request is sent to <code>POST /api/v1/documents/{doc_id}/ai-command</code> with JWT auth header.</li>
+          <li><strong>Step 2 (Snapshot Guard):</strong> <code>version_history.py</code> creates a physical binary copy of the current file in <code>backend/storage/v{n}.docx</code> before any changes occur.</li>
+          <li><strong>Step 3 (NLU Cascade Routing):</strong>
+            <ul style="margin-left: 20px;">
+              <li>Calls <code>classify_intent()</code> on local DistilBERT model. Confidence = <code>0.98</code> ➔ Intent = <code>replace_text</code>.</li>
+              <li>Calls <code>extract_slots()</code> ➔ Extracts <code>old_text="Confidential Draft"</code>, <code>new_text="Approved Version"</code>, <code>font_name="Arial"</code>.</li>
+              <li>(If confidence was &lt; 0.15, it would fall back to Google Gemini <code>gemini-3.8-flash</code> or Regex).</li>
+            </ul>
+          </li>
+          <li><strong>Step 4 (Deterministic DOM Execution):</strong>
+            <ul style="margin-left: 20px;">
+              <li><code>docx_editor.py</code> opens the document OXML package.</li>
+              <li>Runs cross-run coalescing across all paragraphs and table cells to match <code>"Confidential Draft"</code>.</li>
+              <li>Replaces text, updates the run's font to <code>Arial</code>, and appends <code>&lt;w:highlight w:val="yellow"/&gt;</code>.</li>
+              <li>Saves the updated document to <code>backend/storage/{doc_id}.docx</code>.</li>
+            </ul>
+          </li>
+          <li><strong>Step 5 (Diff & Metadata Update):</strong> MongoDB document record is updated with the edit entry (timestamp, action, user).</li>
+          <li><strong>Step 6 (UI Refresh):</strong> Backend returns HTTP 200 with changed blocks. Frontend updates preview pane showing yellow highlighted modifications with an option to <strong>Accept</strong> or <strong>Revert</strong>.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- SECTION 10: MODEL TRAINING & EVALUATION -->
+    <section id="ml-training" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">10</div>
+          <div>
+            <h2 class="section-title">Model Training, Datasets & Evaluation</h2>
+            <div class="section-subtitle">How RapidDoc's AI models were constructed, trained, and benchmarked</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-accent-top">
+          <h3 class="card-title">Dataset Engineering (<code>generate_dataset.py</code>)</h3>
+          <p class="card-text">
+            To train the intent classifier, <strong>8,400 schema-validated records</strong> were generated across 24 intent categories (exactly 280 examples each) to prevent class imbalance.
+          </p>
+          <ul style="margin: 12px 0 0 18px; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>Train / Val / Test Split:</strong> 80% train (6,720), 10% val (840), 10% test (840).</li>
+            <li><strong>The "Phantom Slot" Innovation:</strong> In earlier synthetic datasets, templates included slots like <code>page=2</code> even when the sentence didn't say it. RapidDoc only registers slots that explicitly appear in the generated text, eliminating hallucinated slot predictions.</li>
+            <li><strong>Politeness & Framing Diversity:</strong> Uses prefixes (<em>"please"</em>, <em>"kindly"</em>, <em>"could you"</em>) and generic frames to create 300+ unique sentence structures per intent.</li>
+          </ul>
+        </div>
+
+        <div class="card card-accent-purple">
+          <h3 class="card-title">Task Datasets & Pretrained Checkpoints</h3>
+          <p class="card-text">
+            RapidDoc leverages domain-specific datasets rather than general-purpose conversational LLMs:
+          </p>
+          <ul style="margin: 12px 0 0 18px; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.6;">
+            <li><strong>CoEdIT (Grammarly):</strong> 69,000 instruction-guided text rewriting pairs used for tone changes, simplification, and grammar repair.</li>
+            <li><strong>RACE (Reading Comprehension):</strong> 20,000 multi-choice comprehension questions with distractors used for fine-tuning BART-base.</li>
+            <li><strong>CNN / DailyMail:</strong> Evaluated for abstractive summarization metrics.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="table-container" style="margin-top: 24px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Model Component</th>
+              <th>Base Architecture</th>
+              <th>Dataset Used</th>
+              <th>Target Metric</th>
+              <th>Achieved Performance</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Intent Classifier</strong></td>
+              <td><code>distilbert-base-uncased</code></td>
+              <td>RapidDoc Intent (8,400 records)</td>
+              <td>Classification Accuracy</td>
+              <td><strong>~99.8% Test Accuracy</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Slot Extractor</strong></td>
+              <td>Deterministic Rule / BIO Head</td>
+              <td>Template validation set</td>
+              <td>Exact Slot Match</td>
+              <td><strong>~95.2% Exact Match</strong></td>
+            </tr>
+            <tr>
+              <td><strong>Document Summarizer</strong></td>
+              <td><code>facebook/bart-large-cnn</code></td>
+              <td>Complete-Doc Summarization set</td>
+              <td>ROUGE-1 / Late Retention</td>
+              <td><strong>>52% ROUGE-1 | >92% Late-Section Retention</strong></td>
+            </tr>
+            <tr>
+              <td><strong>MCQ Generator</strong></td>
+              <td><code>BART-base</code></td>
+              <td>RACE Assessment dataset</td>
+              <td>Format Validity & Distractors</td>
+              <td><strong>4-Beam Valid Candidate Filtering (100% Valid)</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SECTION 11: VIVA & REVIEWER Q&A (CHEAT SHEET) -->
+    <section id="viva-questions" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">11</div>
+          <div>
+            <h2 class="section-title">Viva & Reviewer Q&A: Master Cheat Sheet</h2>
+            <div class="section-subtitle">Top 10 questions examiners, interviewers, or reviewers will ask you — and the exact answers to give</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Q1 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q1</span>
+          <span>Why not just copy-paste the document text into ChatGPT or Gemini and let it rewrite the document?</span>
+        </div>
+        <div class="qa-answer">
+          LLMs are purely text-to-text token predictors; they have no concept of OpenXML document hierarchies, binary zip structures, or PDF coordinate trees. If you give an LLM a Word document, it strips out embedded tables, multi-section headers, footer unlinking, page numbers, dynamic field codes, and embedded images. You get back plain text or raw markdown.
+          <br><br>
+          <strong>RapidDoc's approach:</strong> AI is only used for <em>natural language comprehension</em> (determining intent and slots). The actual document modification is performed by a <em>deterministic XML/DOM engine</em>, which guarantees <strong>zero loss of styling, formatting, tables, or media</strong>.
+        </div>
+      </div>
+
+      <!-- Q2 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q2</span>
+          <span>What is "Cross-Run Text Fragmentation" in Word, and how does RapidDoc solve it?</span>
+        </div>
+        <div class="qa-answer">
+          In Microsoft Word's underlying OpenXML (<code>word/document.xml</code>), a sentence is rarely stored as a single continuous string. Word fragments sentences into multiple <code>&lt;w:r&gt;</code> (run) XML elements due to spellchecks, edits, or formatting changes. For example, <em>"Confidential Draft"</em> might be split into three separate run tags: <code>"Conf"</code>, <code>"ident"</code>, and <code>"ial Draft"</code>. A standard find-and-replace algorithm will fail to find <em>"Confidential Draft"</em> because the phrase does not exist inside any individual XML tag.
+          <br><br>
+          <strong>How we solved it:</strong> Inside <code>docx_editor.py</code>, we built a <strong>run-coalescing algorithm</strong>. It reconstructs the full sentence text across run boundaries while tracking the exact character indices within each XML run node. When a match is found, it splits and merges the runs cleanly, injects the replacement text, preserves surrounding formatting, and adds yellow highlighting (<code>&lt;w:highlight w:val="yellow"/&gt;</code>) for review.
+        </div>
+      </div>
+
+      <!-- Q3 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q3</span>
+          <span>Why did you build a 3-tier cascade instead of relying 100% on Google Gemini?</span>
+        </div>
+        <div class="qa-answer">
+          Relying entirely on a third-party cloud LLM introduces three major drawbacks:
+          <ol style="margin: 8px 0 0 16px;">
+            <li><strong>Cost:</strong> Paying per-token fees for simple tasks (like "replace old logo" or "change font to Arial") is financially unsustainable.</li>
+            <li><strong>Privacy & Offline Access:</strong> Enterprise and academic documents often contain confidential data that cannot be sent to third-party cloud servers. Local models run completely offline.</li>
+            <li><strong>Network & API Latency/Failures:</strong> If the cloud API has a network glitch or rate limits, the entire application crashes.</li>
+          </ol>
+          <br>
+          By having <strong>Local Brains (Tier 1)</strong>, <strong>Gemini Cloud (Tier 2)</strong>, and <strong>Deterministic Regex Rules (Tier 3)</strong>, RapidDoc stays fast, private, free to run locally, and achieves <strong>100% uptime</strong>.
+        </div>
+      </div>
+
+      <!-- Q4 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q4</span>
+          <span>How does the Long-Document Summarizer prevent "loss of late sections"?</span>
+        </div>
+        <div class="qa-answer">
+          Most transformer summarizers (like BART) have a maximum token limit of 1,024 tokens (~750 words). In traditional systems, any document longer than 2 pages is blindly truncated at the top, which means the most important sections—the <strong>Results, Discussion, and Conclusion</strong>—are completely ignored.
+          <br><br>
+          <strong>RapidDoc's Solution:</strong> In <code>document_summarizer.py</code>, we implemented a <strong>Hierarchical Map-Reduce Pipeline with Late-Section Retention</strong>. The document is split by structural headings. In the <em>Map phase</em>, each section is summarized independently. In the <em>Reduce phase</em>, the section summaries are synthesized into a global summary. Terminal sections (Conclusions and Recommendations) are guaranteed a dedicated allocation in the final output.
+        </div>
+      </div>
+
+      <!-- Q5 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q5</span>
+          <span>How does RapidDoc generate PowerPoint presentations without content overflowing the slides?</span>
+        </div>
+        <div class="qa-answer">
+          Naively packing paragraphs into slides results in broken, unreadable decks. RapidDoc's <code>ppt_templates.py</code> does three things:
+          <ol style="margin: 8px 0 0 16px;">
+            <li><strong>Semantic Outline Parser:</strong> Identifies headings up to depth 3 to establish slide boundaries. If headings are missing (common in lab reports), it parses table label columns (e.g., <em>"Objective"</em>, <em>"Problem Statement"</em>) as implicit headings.</li>
+            <li><strong>Pre-designed Layout Templates:</strong> Applies branded templates (Modern, Corporate, Minimal) with deliberate text-box coordinates.</li>
+            <li><strong>Overflow Control:</strong> Enforces hard limits: maximum 7 bullet points per slide (longer lists automatically spill to a new slide), maximum 14 table rows per slide, and automatic font-scaling to fit bounding boxes.</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- Q6 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q6</span>
+          <span>How does RapidDoc handle image replacement without hallucinating image indices?</span>
+        </div>
+        <div class="qa-answer">
+          In <code>image_resolver.py</code>, we intentionally avoided using a generative model for image replacement. A prompt like <em>"replace the second image"</em> is an <strong>addressing problem</strong>, not a perceptual generation problem.
+          <br><br>
+          Our rule-based image resolver inspects the document's real image list, extracts ordinal keywords (<em>"first"</em>, <em>"2nd"</em>, <em>"last"</em>), and verifies that the index actually exists in the file. If there is ambiguity (e.g. <em>"replace the image on page 3"</em> when page 3 has two diagrams), it surfaces both options to the UI rather than making a random guess.
+        </div>
+      </div>
+
+      <!-- Q7 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q7</span>
+          <span>How does the version history snapshot system work? Why copy files instead of diff patches?</span>
+        </div>
+        <div class="qa-answer">
+          In <code>version_history.py</code>, we capture a <strong>Copy-on-Write binary snapshot</strong> before every single mutation, maintaining up to 40 reversible versions.
+          <br><br>
+          We deliberately chose full binary copies over incremental diff patches because OpenXML files are binary ZIP archives containing interdependent XML parts and media assets. Storing git-style text diffs against binary archives frequently drifts out of sync and corrupts files during rollback. Full copies guarantee <strong>100% reliable one-click rollback</strong> to any previous version.
+        </div>
+      </div>
+
+      <!-- Q8 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q8</span>
+          <span>How do dynamic page numbers work in Word XML?</span>
+        </div>
+        <div class="qa-answer">
+          Unlike plain text where someone writes "Page 1", Microsoft Word uses dynamic XML field codes. In <code>header_footer.py</code>, we inject an OpenXML simple field element (<code>&lt;w:fldSimple w:instr="PAGE"/&gt;</code>) along with <code>NUMPAGES</code> for total pages. This ensures that when the user adds or deletes pages in Microsoft Word or LibreOffice, Word automatically recalculates the page numbers dynamically.
+        </div>
+      </div>
+
+      <!-- Q9 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q9</span>
+          <span>What role does MongoDB play versus local disk storage?</span>
+        </div>
+        <div class="qa-answer">
+          RapidDoc uses a <strong>hybrid storage architecture</strong>:
+          <ul style="margin: 8px 0 0 16px;">
+            <li><strong>MongoDB Community Server (via Motor async driver):</strong> Stores structured metadata: user profiles, hashed passwords, document ownership, pipeline progression states (Ingested ➔ Header/Footer ➔ Content ➔ Finalized), and edit logs.</li>
+            <li><strong>Local Disk Storage (<code>/storage</code>):</strong> Stores the heavy binary assets: uploaded DOCX/PDF files, extracted image assets, and version snapshots (<code>v1.docx</code>, <code>v2.docx</code>). This keeps MongoDB queries light and fast.</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Q10 -->
+      <div class="qa-card">
+        <div class="qa-question">
+          <span class="qa-q-badge">Q10</span>
+          <span>How does live preview work in the web browser without Microsoft Word installed?</span>
+        </div>
+        <div class="qa-answer">
+          In <code>preview.py</code> and <code>pdf_converter.py</code>, the backend renders the Word document to high-fidelity PDF pages using headless LibreOffice or converts text runs into structured HTML paragraphs. The frontend renders this inside a sandboxed viewport with zoom controls and side-by-side editing, allowing users to see their changes in real-time on any browser and operating system.
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 12: TECH SPECS & ENVIRONMENT -->
+    <section id="tech-specs" class="section-wrap">
+      <div class="section-header">
+        <div class="section-header-left">
+          <div class="section-number">12</div>
+          <div>
+            <h2 class="section-title">Technical Specifications & Environment</h2>
+            <div class="section-subtitle">Core dependencies, directory structure, and configuration</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3 class="card-title">Technology Stack</h3>
+          <ul style="font-size: 0.88rem; color: var(--text-secondary); line-height: 1.8; margin-left: 18px;">
+            <li><strong>Frontend:</strong> React 18, Vite, TailwindCSS, Framer Motion, Lucide Icons</li>
+            <li><strong>Backend:</strong> Python 3.10+, FastAPI, Uvicorn, Pydantic Settings</li>
+            <li><strong>Document DOM:</strong> python-docx, PyMuPDF (fitz), pdfplumber, python-pptx</li>
+            <li><strong>Office Conversion:</strong> LibreOffice Headless (<code>soffice</code>)</li>
+            <li><strong>AI / ML Stack:</strong> PyTorch, HuggingFace Transformers, Datasets, Scikit-Learn</li>
+            <li><strong>Cloud Fallback:</strong> Google Gemini API (<code>gemini-3.8-flash</code>)</li>
+            <li><strong>Database:</strong> MongoDB 7.0+ (Motor async driver)</li>
+            <li><strong>Security:</strong> OAuth2 Password Bearer, Passlib Bcrypt, JWT (HS256)</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3 class="card-title">Key Environment Variables (<code>backend/.env</code>)</h3>
+          <pre>PORT=8000
+HOST=0.0.0.0
+MONGODB_URL=mongodb://localhost:27017/rapiddoc
+JWT_SECRET_KEY=&lt;auto-generated-48-byte-secret&gt;
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=60
+STORAGE_TYPE=local
+STORAGE_LOCAL_PATH=storage
+GEMINI_API_KEY=&lt;your-google-gemini-key&gt;
+GEMINI_MODEL=gemini-3.8-flash
+AI_USE_LOCAL_MODELS=True
+INTENT_CONFIDENCE_THRESHOLD=0.15</pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer style="margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--border-color); text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+      <p>RapidDoc: AI Document Editor & Architecture • Comprehensive Technical Dossier & Presentation Guide</p>
+      <p style="margin-top: 4px;">Created for academic review, project defense, viva preparation, and system documentation.</p>
+    </footer>
+
+  </main>
+</div>
+
+<!-- ==================== INTERACTIVE JAVASCRIPT ==================== -->
+<script>
+  // Theme Toggle Functionality
+  function toggleTheme() {
+    const body = document.body;
+    const isLight = body.getAttribute('data-theme') === 'light';
+    const newTheme = isLight ? 'dark' : 'light';
+    
+    if (newTheme === 'light') {
+      body.setAttribute('data-theme', 'light');
+      document.getElementById('themeIcon').textContent = '🌙';
+      document.getElementById('themeLabel').textContent = 'Dark Mode';
+    } else {
+      body.removeAttribute('data-theme');
+      document.getElementById('themeIcon').textContent = '☀️';
+      document.getElementById('themeLabel').textContent = 'Light Mode';
+    }
+  }
+
+  // Accordion Expand/Collapse Functionality
+  function toggleAccordion(header) {
+    const parent = header.parentElement;
+    parent.classList.toggle('open');
+  }
+
+  // Filter Matrix Table Functionality
+  function filterMatrix(category, button) {
+    // Update active button
+    const buttons = document.querySelectorAll('.filter-btn');
+    buttons.forEach(btn => btn.classList.remove('active'));
+    button.classList.add('active');
+
+    // Filter table rows
+    const rows = document.querySelectorAll('#matrixTable tbody tr');
+    rows.forEach(row => {
+      const rowCat = row.getAttribute('data-cat');
+      if (category === 'all' || rowCat === category) {
+        row.style.display = '';
+      } else {
+        row.style.display = 'none';
+      }
+    });
+  }
+
+  // Global Quick Search Functionality
+  function handleGlobalSearch(query) {
+    const q = query.toLowerCase().trim();
+    const searchableCards = document.querySelectorAll('.card, .qa-card, .accordion');
+
+    if (!q) {
+      searchableCards.forEach(card => card.style.display = '');
+      return;
+    }
+
+    searchableCards.forEach(card => {
+      const text = card.textContent.toLowerCase();
+      if (text.includes(q)) {
+        card.style.display = '';
+        // If it's an accordion that matches, open it
+        if (card.classList.contains('accordion')) {
+          card.classList.add('open');
+        }
+      } else {
+        card.style.display = 'none';
+      }
+    });
+  }
+
+  // Active navigation link tracking on scroll
+  window.addEventListener('scroll', () => {
+    const sections = document.querySelectorAll('.section-wrap');
+    const scrollPos = window.scrollY + 100;
+
+    sections.forEach(sec => {
+      const top = sec.offsetTop;
+      const height = sec.offsetHeight;
+      const id = sec.getAttribute('id');
+      const navLink = document.querySelector(`.nav-links a[href="#${id}"]`);
+
+      if (scrollPos >= top && scrollPos < top + height) {
+        document.querySelectorAll('.nav-links a').forEach(a => a.classList.remove('active'));
+        if (navLink) navLink.classList.add('active');
+      }
+    });
+  });
+</script>
+
+</body>
+</html>

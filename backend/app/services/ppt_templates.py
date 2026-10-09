@@ -403,28 +403,43 @@ def _font_size_for(length: int, base: float, minimum: float = 11.0) -> float:
 
 THEMES = {
     "modern": {
-        "title":     {"accent": "#1D4ED8", "background": "#0F172A", "title_color": "#F8FAFC", "body_color": "#CBD5E1"},
-        "section":   {"accent": "#4F46E5", "background": "#EEF2FF", "title_color": "#1E1B4B", "body_color": "#3730A3"},
-        "bullets":   {"accent": "#2563EB", "background": "#FFFFFF", "title_color": "#0F172A", "body_color": "#1E293B"},
-        "code":      {"accent": "#0F172A", "background": "#0F172A", "title_color": "#F8FAFC", "body_color": "#E2E8F0"},
-        "table":     {"accent": "#7C3AED", "background": "#F8FAFC", "title_color": "#0F172A", "body_color": "#1E293B"},
-        "image":     {"accent": "#EA580C", "background": "#FFFFFF", "title_color": "#0F172A", "body_color": "#1E293B"},
+        "title":         {"accent": "#1D4ED8", "background": "#0F172A", "title_color": "#F8FAFC", "body_color": "#CBD5E1"},
+        "section":       {"accent": "#4F46E5", "background": "#EEF2FF", "title_color": "#1E1B4B", "body_color": "#3730A3"},
+        "bullets":       {"accent": "#2563EB", "background": "#FFFFFF", "title_color": "#0F172A", "body_color": "#1E293B"},
+        "code":          {"accent": "#0F172A", "background": "#0F172A", "title_color": "#F8FAFC", "body_color": "#E2E8F0"},
+        "table":         {"accent": "#7C3AED", "background": "#F8FAFC", "title_color": "#0F172A", "body_color": "#1E293B"},
+        "image":         {"accent": "#EA580C", "background": "#FFFFFF", "title_color": "#0F172A", "body_color": "#1E293B"},
+        "metrics":       {"accent": "#2563EB", "background": "#F8FAFC", "title_color": "#0F172A", "body_color": "#475569", "card_bg": "#FFFFFF", "card_border": "#E2E8F0"},
+        "summary_cards": {"accent": "#3B82F6", "background": "#FFFFFF", "title_color": "#0F172A", "body_color": "#334155", "card_bg": "#F8FAFC", "card_border": "#E2E8F0"},
+        "two_column":    {"accent": "#2563EB", "background": "#FFFFFF", "title_color": "#0F172A", "body_color": "#1E293B", "card_bg": "#F8FAFC", "card_border": "#CBD5E1"},
+        "steps":         {"accent": "#4F46E5", "background": "#F8FAFC", "title_color": "#0F172A", "body_color": "#334155", "card_bg": "#FFFFFF", "card_border": "#E2E8F0"},
+        "takeaways":     {"accent": "#10B981", "background": "#FFFFFF", "title_color": "#0F172A", "body_color": "#1E293B", "card_bg": "#F0FDF4", "card_border": "#BBF7D0"},
     },
     "corporate": {
-        "title":     {"accent": "#0F766E", "background": "#0B2B26", "title_color": "#F0FDFA", "body_color": "#99F6E4"},
-        "section":   {"accent": "#0F766E", "background": "#ECFDF5", "title_color": "#134E4A", "body_color": "#115E59"},
-        "bullets":   {"accent": "#0F766E", "background": "#FFFFFF", "title_color": "#0B2B26", "body_color": "#1F2937"},
-        "code":      {"accent": "#0B2B26", "background": "#0B2B26", "title_color": "#F0FDFA", "body_color": "#99F6E4"},
-        "table":     {"accent": "#115E59", "background": "#F8FAFC", "title_color": "#0B2B26", "body_color": "#1F2937"},
-        "image":     {"accent": "#B45309", "background": "#FFFFFF", "title_color": "#0B2B26", "body_color": "#1F2937"},
+        "title":         {"accent": "#0F766E", "background": "#0B2B26", "title_color": "#F0FDFA", "body_color": "#99F6E4"},
+        "section":       {"accent": "#0F766E", "background": "#ECFDF5", "title_color": "#134E4A", "body_color": "#115E59"},
+        "bullets":       {"accent": "#0F766E", "background": "#FFFFFF", "title_color": "#0B2B26", "body_color": "#1F2937"},
+        "code":          {"accent": "#0B2B26", "background": "#0B2B26", "title_color": "#F0FDFA", "body_color": "#99F6E4"},
+        "table":         {"accent": "#115E59", "background": "#F8FAFC", "title_color": "#0B2B26", "body_color": "#1F2937"},
+        "image":         {"accent": "#B45309", "background": "#FFFFFF", "title_color": "#0B2B26", "body_color": "#1F2937"},
+        "metrics":       {"accent": "#0F766E", "background": "#F0FDFA", "title_color": "#0B2B26", "body_color": "#134E4A", "card_bg": "#FFFFFF", "card_border": "#CCFBF1"},
+        "summary_cards": {"accent": "#0F766E", "background": "#FFFFFF", "title_color": "#0B2B26", "body_color": "#1F2937", "card_bg": "#F0FDFA", "card_border": "#CCFBF1"},
+        "two_column":    {"accent": "#0F766E", "background": "#FFFFFF", "title_color": "#0B2B26", "body_color": "#1F2937", "card_bg": "#F8FAFC", "card_border": "#E2E8F0"},
+        "steps":         {"accent": "#0D9488", "background": "#F8FAFC", "title_color": "#0B2B26", "body_color": "#1F2937", "card_bg": "#FFFFFF", "card_border": "#E2E8F0"},
+        "takeaways":     {"accent": "#059669", "background": "#FFFFFF", "title_color": "#0B2B26", "body_color": "#1F2937", "card_bg": "#ECFDF5", "card_border": "#A7F3D0"},
     },
     "minimal": {
-        "title":     {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#6B7280"},
-        "section":   {"accent": "#9CA3AF", "background": "#F9FAFB", "title_color": "#111827", "body_color": "#6B7280"},
-        "bullets":   {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151"},
-        "code":      {"accent": "#111827", "background": "#111827", "title_color": "#F9FAFB", "body_color": "#D1D5DB"},
-        "table":     {"accent": "#4B5563", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151"},
-        "image":     {"accent": "#6B7280", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151"},
+        "title":         {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#6B7280"},
+        "section":       {"accent": "#9CA3AF", "background": "#F9FAFB", "title_color": "#111827", "body_color": "#6B7280"},
+        "bullets":       {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151"},
+        "code":          {"accent": "#111827", "background": "#111827", "title_color": "#F9FAFB", "body_color": "#D1D5DB"},
+        "table":         {"accent": "#4B5563", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151"},
+        "image":         {"accent": "#6B7280", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151"},
+        "metrics":       {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#4B5563", "card_bg": "#F9FAFB", "card_border": "#E5E7EB"},
+        "summary_cards": {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#4B5563", "card_bg": "#F9FAFB", "card_border": "#E5E7EB"},
+        "two_column":    {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151", "card_bg": "#F9FAFB", "card_border": "#E5E7EB"},
+        "steps":         {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#4B5563", "card_bg": "#F9FAFB", "card_border": "#E5E7EB"},
+        "takeaways":     {"accent": "#111827", "background": "#FFFFFF", "title_color": "#111827", "body_color": "#374151", "card_bg": "#F9FAFB", "card_border": "#E5E7EB"},
     },
 }
 
@@ -610,10 +625,17 @@ def assess_suitability(items: list) -> dict:
 
 def build_outline(items: list) -> list:
     """Turn an ordered block stream into a list of slide specs.
-
-    ``items`` are the dicts produced by ``iter_docx_body_items``. See the module
-    docstring for the shape of a slide spec.
+    First analyzes document structure, narrative, metrics, workflows, and comparisons,
+    producing purposeful slide types. Falls back to structural heuristics if needed.
     """
+    try:
+        from RapidDoc.backend.app.services.ppt_analyzer import analyze_and_build_outline
+        analyzed = analyze_and_build_outline(items)
+        if analyzed and len(analyzed) >= 2:
+            return analyzed
+    except Exception as exc:
+        logger.warning("Intelligent document presentation analyzer failed: %s; falling back to legacy outline", exc)
+
     has_real_headings = any(
         item.get("kind") == "paragraph" and (item.get("heading_level") or 0) > 0
         for item in items
@@ -1027,6 +1049,26 @@ def _add_rect(slide, left_in, top_in, width_in, height_in, color_hex: str):
     return shape
 
 
+def _add_card(slide, left_in, top_in, width_in, height_in, bg_hex="#F8FAFC", border_hex="#E2E8F0"):
+    """A rounded rectangle container with subtle background and border for cards."""
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches, Pt
+
+    shape = slide.shapes.add_shape(
+        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(left_in), Inches(top_in),
+        Inches(width_in), Inches(height_in),
+    )
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = _rgb(bg_hex)
+    if border_hex:
+        shape.line.color.rgb = _rgb(border_hex)
+        shape.line.width = Pt(1.2)
+    else:
+        shape.line.fill.background()
+    shape.shadow.inherit = False
+    return shape
+
+
 def _add_background(slide, color_hex: str) -> None:
     """Fill the slide, keeping the rectangle behind everything added later."""
     shape = _add_rect(slide, 0, 0, SLIDE_WIDTH_IN, SLIDE_HEIGHT_IN, color_hex)
@@ -1318,6 +1360,249 @@ def _render_code_slide(prs, blank, spec, theme):
     return slide
 
 
+def _render_summary_cards_slide(prs, blank, spec, theme):
+    """Executive summary with 2 or 3 structured cards side by side."""
+    slide = prs.slides.add_slide(blank)
+    _add_background(slide, theme.get("background", "#FFFFFF"))
+    _add_rect(slide, 0, 0, SLIDE_WIDTH_IN, 0.16, theme["accent"])
+
+    title = spec.get("title") or "Executive Summary & Core Objectives"
+    _add_text(slide, _truncate(title, 100), 0.65, 0.45, 12.0, 0.85,
+              size=_font_size_for(len(title), 28, 20), bold=True,
+              color=theme["title_color"])
+
+    cards = spec.get("cards") or []
+    if not cards:
+        _add_text(slide, "No summary cards available.", 0.75, 1.6, 12.0, 1.0, size=16, color=theme["body_color"])
+        return slide
+
+    card_bg = theme.get("card_bg", "#F8FAFC")
+    card_border = theme.get("card_border", "#E2E8F0")
+
+    num_cards = min(3, len(cards))
+    total_w = 12.0
+    spacing = 0.35
+    card_w = (total_w - (num_cards - 1) * spacing) / num_cards
+    card_h = 4.7
+    top = 1.6
+
+    for i in range(num_cards):
+        c_left = 0.65 + i * (card_w + spacing)
+        c = cards[i]
+        _add_card(slide, c_left, top, card_w, card_h, card_bg, card_border)
+        _add_rect(slide, c_left, top, card_w, 0.08, theme["accent"])
+
+        c_title = c.get("title") or f"Pillar {i + 1}"
+        _add_text(slide, _truncate(c_title, 40), c_left + 0.25, top + 0.25, card_w - 0.5, 0.65,
+                  size=16, bold=True, color=theme["title_color"])
+
+        c_text = c.get("text") or ""
+        _add_text(slide, c_text, c_left + 0.25, top + 0.95, card_w - 0.5, card_h - 1.2,
+                  size=13, color=theme["body_color"], line_spacing=1.2)
+
+    return slide
+
+
+def _render_metrics_slide(prs, blank, spec, theme):
+    """Quantitative results and key metrics callout cards."""
+    from pptx.enum.text import PP_ALIGN
+
+    slide = prs.slides.add_slide(blank)
+    _add_background(slide, theme.get("background", "#FFFFFF"))
+    _add_rect(slide, 0, 0, SLIDE_WIDTH_IN, 0.16, theme["accent"])
+
+    title = spec.get("title") or "Key Metrics & Quantifiable Results"
+    _add_text(slide, _truncate(title, 100), 0.65, 0.45, 12.0, 0.85,
+              size=_font_size_for(len(title), 28, 20), bold=True,
+              color=theme["title_color"])
+
+    metrics = spec.get("metrics") or []
+    if not metrics:
+        _add_text(slide, "No metrics available.", 0.75, 1.6, 12.0, 1.0, size=16, color=theme["body_color"])
+        return slide
+
+    card_bg = theme.get("card_bg", "#FFFFFF")
+    card_border = theme.get("card_border", "#E2E8F0")
+
+    num = min(4, max(1, len(metrics)))
+    total_w = 12.0
+    spacing = 0.3
+    card_w = (total_w - (num - 1) * spacing) / num
+    card_h = 4.6
+    top = 1.65
+
+    for i in range(num):
+        m_left = 0.65 + i * (card_w + spacing)
+        m = metrics[i]
+        _add_card(slide, m_left, top, card_w, card_h, card_bg, card_border)
+        _add_rect(slide, m_left + (card_w - 1.2) / 2, top + 0.2, 1.2, 0.05, theme["accent"])
+
+        num_str = str(m.get("number") or "100%")
+        _add_text(slide, num_str, m_left + 0.15, top + 0.55, card_w - 0.3, 1.3,
+                  size=36 if len(num_str) <= 7 else 28, bold=True, color=theme["accent"], align=PP_ALIGN.CENTER)
+
+        m_label = m.get("label") or "Metric"
+        _add_text(slide, _truncate(m_label, 32), m_left + 0.2, top + 1.95, card_w - 0.4, 0.7,
+                  size=15, bold=True, color=theme["title_color"], align=PP_ALIGN.CENTER)
+
+        m_desc = m.get("desc") or ""
+        _add_text(slide, _truncate(m_desc, 120), m_left + 0.2, top + 2.75, card_w - 0.4, 1.6,
+                  size=12, color=theme["body_color"], align=PP_ALIGN.CENTER, line_spacing=1.15)
+
+    return slide
+
+
+def _render_two_column_slide(prs, blank, spec, theme):
+    """Comparative analysis or two-pillar strategy slide."""
+    from pptx.util import Inches, Pt
+
+    slide = prs.slides.add_slide(blank)
+    _add_background(slide, theme.get("background", "#FFFFFF"))
+    _add_rect(slide, 0, 0, SLIDE_WIDTH_IN, 0.16, theme["accent"])
+
+    title = spec.get("title") or "Comparative Analysis"
+    _add_text(slide, _truncate(title, 100), 0.65, 0.45, 12.0, 0.85,
+              size=_font_size_for(len(title), 28, 20), bold=True,
+              color=theme["title_color"])
+
+    col1_title = spec.get("col1_title") or "Current State / Challenges"
+    col1_bullets = spec.get("col1_bullets") or []
+    col2_title = spec.get("col2_title") or "Target Solution / Impact"
+    col2_bullets = spec.get("col2_bullets") or []
+
+    columns = spec.get("columns")
+    if columns and len(columns) >= 2:
+        col1_title = columns[0].get("title") or col1_title
+        col1_bullets = columns[0].get("bullets") or col1_bullets
+        col2_title = columns[1].get("title") or col2_title
+        col2_bullets = columns[1].get("bullets") or col2_bullets
+
+    col_w = 5.8
+    col_h = 4.8
+    top = 1.55
+
+    for idx, (c_left, c_title, c_bullets, c_accent) in enumerate([
+        (0.65, col1_title, col1_bullets, "#64748B"),
+        (6.85, col2_title, col2_bullets, theme["accent"]),
+    ]):
+        _add_card(slide, c_left, top, col_w, col_h, theme.get("card_bg", "#F8FAFC"), theme.get("card_border", "#CBD5E1"))
+        _add_rect(slide, c_left, top, col_w, 0.48, c_accent)
+        _add_text(slide, _truncate(c_title, 40), c_left + 0.25, top + 0.08, col_w - 0.5, 0.35,
+                  size=14, bold=True, color="#FFFFFF")
+
+        bullet_box = slide.shapes.add_textbox(Inches(c_left + 0.25), Inches(top + 0.65), Inches(col_w - 0.5), Inches(col_h - 0.85))
+        tf = bullet_box.text_frame
+        tf.word_wrap = True
+
+        clean_bullets = [b if isinstance(b, str) else b.get("text", "") for b in c_bullets if b]
+        if not clean_bullets:
+            clean_bullets = ["No specific items recorded."]
+        for b_i, b_text in enumerate(clean_bullets[:5]):
+            p = tf.paragraphs[0] if b_i == 0 else tf.add_paragraph()
+            p.text = f"•  {b_text}"
+            p.font.size = Pt(13)
+            p.font.color.rgb = _rgb(theme["body_color"])
+            p.font.name = "Calibri"
+            p.space_after = Pt(8)
+            p.line_spacing = 1.15
+
+    return slide
+
+
+def _render_steps_slide(prs, blank, spec, theme):
+    """Workflow, methodology, or sequential execution pipeline."""
+    from pptx.enum.text import PP_ALIGN
+
+    slide = prs.slides.add_slide(blank)
+    _add_background(slide, theme.get("background", "#FFFFFF"))
+    _add_rect(slide, 0, 0, SLIDE_WIDTH_IN, 0.16, theme["accent"])
+
+    title = spec.get("title") or "Execution Pipeline & Methodology"
+    _add_text(slide, _truncate(title, 100), 0.65, 0.45, 12.0, 0.85,
+              size=_font_size_for(len(title), 28, 20), bold=True,
+              color=theme["title_color"])
+
+    steps = spec.get("steps") or []
+    if not steps:
+        _add_text(slide, "No steps defined.", 0.75, 1.6, 12.0, 1.0, size=16, color=theme["body_color"])
+        return slide
+
+    card_bg = theme.get("card_bg", "#FFFFFF")
+    card_border = theme.get("card_border", "#E2E8F0")
+
+    num = min(4, max(1, len(steps)))
+    total_w = 12.0
+    spacing = 0.3
+    card_w = (total_w - (num - 1) * spacing) / num
+    card_h = 4.6
+    top = 1.65
+
+    for i in range(num):
+        s_left = 0.65 + i * (card_w + spacing)
+        s = steps[i]
+        _add_card(slide, s_left, top, card_w, card_h, card_bg, card_border)
+
+        step_num = str(s.get("step") or f"0{i + 1}")
+        _add_rect(slide, s_left + 0.3, top + 0.3, 0.7, 0.35, theme["accent"])
+        _add_text(slide, step_num, s_left + 0.3, top + 0.32, 0.7, 0.32,
+                  size=12, bold=True, color="#FFFFFF", align=PP_ALIGN.CENTER)
+
+        s_title = s.get("title") or f"Phase {i + 1}"
+        _add_text(slide, _truncate(s_title, 35), s_left + 0.25, top + 0.85, card_w - 0.5, 0.75,
+                  size=15, bold=True, color=theme["title_color"])
+
+        s_desc = s.get("desc") or ""
+        _add_text(slide, _truncate(s_desc, 140), s_left + 0.25, top + 1.65, card_w - 0.5, card_h - 1.85,
+                  size=12, color=theme["body_color"], line_spacing=1.2)
+
+    return slide
+
+
+def _render_takeaways_slide(prs, blank, spec, theme):
+    """Strategic conclusion and key takeaways rows."""
+    slide = prs.slides.add_slide(blank)
+    _add_background(slide, theme.get("background", "#FFFFFF"))
+    _add_rect(slide, 0, 0, SLIDE_WIDTH_IN, 0.16, theme["accent"])
+
+    title = spec.get("title") or "Key Takeaways & Strategic Conclusion"
+    _add_text(slide, _truncate(title, 100), 0.65, 0.45, 12.0, 0.85,
+              size=_font_size_for(len(title), 28, 20), bold=True,
+              color=theme["title_color"])
+
+    takeaways = spec.get("takeaways") or []
+    if not takeaways:
+        bullets = spec.get("bullets") or []
+        takeaways = [{"title": f"Takeaway {idx + 1}", "desc": b.get("text", "") if isinstance(b, dict) else str(b)} for idx, b in enumerate(bullets[:4])]
+
+    if not takeaways:
+        _add_text(slide, "No takeaways recorded.", 0.75, 1.6, 12.0, 1.0, size=16, color=theme["body_color"])
+        return slide
+
+    card_bg = theme.get("card_bg", "#F0FDF4")
+    card_border = theme.get("card_border", "#BBF7D0")
+
+    num = min(4, len(takeaways))
+    row_h = 1.05
+    spacing = 0.22
+    top = 1.6
+
+    for i in range(num):
+        t_top = top + i * (row_h + spacing)
+        t = takeaways[i]
+        _add_card(slide, 0.65, t_top, 12.0, row_h, card_bg, card_border)
+        _add_rect(slide, 0.65, t_top, 0.12, row_h, theme["accent"])
+
+        t_title = t.get("title") or f"Takeaway {i + 1}"
+        t_desc = t.get("desc") or ""
+
+        _add_text(slide, _truncate(t_title, 36), 0.95, t_top + 0.12, 11.5, 0.32,
+                  size=14, bold=True, color=theme["title_color"])
+        _add_text(slide, _truncate(t_desc, 150), 0.95, t_top + 0.45, 11.5, 0.52,
+                  size=12, color=theme["body_color"])
+
+    return slide
+
+
 _RENDERERS = {
     "title": _render_title_slide,
     "section": _render_section_slide,
@@ -1325,6 +1610,16 @@ _RENDERERS = {
     "table": _render_table_slide,
     "image": _render_image_slide,
     "code": _render_code_slide,
+    "summary_cards": _render_summary_cards_slide,
+    "cards": _render_summary_cards_slide,
+    "metrics": _render_metrics_slide,
+    "stats": _render_metrics_slide,
+    "two_column": _render_two_column_slide,
+    "comparison": _render_two_column_slide,
+    "steps": _render_steps_slide,
+    "timeline": _render_steps_slide,
+    "takeaways": _render_takeaways_slide,
+    "conclusion": _render_takeaways_slide,
 }
 
 

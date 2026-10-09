@@ -2421,7 +2421,7 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                               </div>
                               <span className="block px-3 py-1 text-[8px] font-bold text-slate-400 uppercase bg-slate-50 border-t border-slate-100 rounded-b-lg">
                                 Table {table.table_index + 1} &middot; {table.n_rows} rows &times; {table.n_cols} columns &middot; double-click a cell to edit
-
+                              </span>
                             </div>
                           );
                         }

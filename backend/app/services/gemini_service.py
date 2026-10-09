@@ -460,6 +460,94 @@ def _fallback_presentation_action(prompt: str) -> dict | None:
             "theme": theme,
             "engine": "rule",
         }
+def _fallback_header_footer_action(prompt: str) -> dict | None:
+    p = prompt.strip()
+    target_match = re.search(r"\b(header|footer|heder|foter)\b", p, re.I)
+    if not target_match:
+        return None
+
+    target_word = target_match.group(1).lower()
+    target = "header" if target_word.startswith("h") else "footer"
+
+    # Avoid capturing heading styling commands ("change headers to dark blue", "make header bold")
+    p_lower = p.lower()
+    for color in COLOR_NAME_TO_RGB:
+        if color in p_lower and re.search(r"\bheaders?\b", p_lower):
+            return None
+    if re.search(r"\b(?:bold|italic|underline|size\s*\d+|\d+\s*pt|\d+\s*px)\b", p_lower) and re.search(r"\bheaders?\b", p_lower):
+        return None
+
+    # Check for change/set/update/replace/make/put/edit/add action or colon syntax
+    action_match = re.search(
+        r"\b(?:change|c?hange|set|update|make|add|put|modify|replace|repalce|edit|write)\b|"
+        r"^(?:header|footer|heder|foter)\b",
+        p, re.I
+    )
+    if not action_match:
+        return None
+
+    # 1. Check for quoted new_text first so words inside quotes don't interfere with page/part parsing
+    new_text = ""
+    clean_p = p
+    m_quote = re.search(r'''["'“”`](.+?)['"“”`]''', p)
+    if m_quote:
+        new_text = m_quote.group(1).strip()
+        clean_p = p[:m_quote.start()] + " " + p[m_quote.end():]
+
+    # 2. Parse page scope
+    page_scope = "all"
+    m_pg = re.search(r"\b(?:on|for|in)?\s*(?:the\s+)?page\s*#?\s*(\d+)\b", clean_p, re.I)
+    if m_pg:
+        page_scope = int(m_pg.group(1))
+        clean_p = clean_p[:m_pg.start()] + " " + clean_p[m_pg.end():]
+    elif re.search(r"\b(?:on|for|in)?\s*(?:the\s+)?(?:first\s+page|cover\s+page)\b", clean_p, re.I):
+        page_scope = "first"
+        clean_p = re.sub(r"\b(?:on|for|in)?\s*(?:the\s+)?(?:first\s+page|cover\s+page)\b", "", clean_p, flags=re.I)
+    elif re.search(r"\b(?:on|for|in)?\s*(?:the\s+)?odd\s+pages?\b", clean_p, re.I):
+        page_scope = "odd"
+        clean_p = re.sub(r"\b(?:on|for|in)?\s*(?:the\s+)?odd\s+pages?\b", "", clean_p, flags=re.I)
+    elif re.search(r"\b(?:on|for|in)?\s*(?:the\s+)?even\s+pages?\b", clean_p, re.I):
+        page_scope = "even"
+        clean_p = re.sub(r"\b(?:on|for|in)?\s*(?:the\s+)?even\s+pages?\b", "", clean_p, flags=re.I)
+    elif re.search(r"\b(?:on|for|in)?\s*(?:all\s+pages?|every\s+page)\b", clean_p, re.I):
+        page_scope = "all"
+        clean_p = re.sub(r"\b(?:on|for|in)?\s*(?:all\s+pages?|every\s+page)\b", "", clean_p, flags=re.I)
+
+    # 3. Parse part: 1 (left), 2 (center), 3 (right)
+    part = None
+    part_name = None
+
+    if re.search(r"\b(?:1st|first|part\s*1|section\s*1|column\s*1|left)\b", clean_p, re.I):
+        part = 1
+        part_name = "left"
+    elif re.search(r"\b(?:2nd|second|part\s*2|section\s*2|column\s*2|cent(?:er|re)|middle|mid)\b", clean_p, re.I):
+        part = 2
+        part_name = "center"
+    elif re.search(r"\b(?:3rd|third|part\s*3|section\s*3|column\s*3|right)\b", clean_p, re.I):
+        part = 3
+        part_name = "right"
+
+    # 4. If new_text wasn't in quotes, extract it from clean_p after to/tot/into/as/with/:
+    if not new_text:
+        m_to = re.search(r'''(?:to|tot|into|as|with|:)\s+(.+?)\.?\s*$''', clean_p, re.I)
+        if m_to:
+            new_text = m_to.group(1).strip().strip("'\"“”`")
+
+    if not new_text:
+        m_colon = re.search(r'''^(?:header|footer|heder|foter)\s*:\s*(.+)$''', clean_p, re.I)
+        if m_colon:
+            new_text = m_colon.group(1).strip().strip("'\"“”`")
+
+    if new_text or part is not None:
+        return {
+            "action": target,
+            "new_text": new_text,
+            "part": part,
+            "part_name": part_name,
+            "page": page_scope,
+            "engine": "rule",
+        }
+
     return None
 
 
@@ -498,6 +586,11 @@ def _fallback_intent(prompt: str, has_image_upload: bool = False, selection: dic
     qa_act = _fallback_qa_action(prompt)
     if qa_act:
         return qa_act
+
+    # Header / Footer with 3-part (1=left, 2=center, 3=right) and page targeting
+    hf_act = _fallback_header_footer_action(prompt)
+    if hf_act:
+        return hf_act
 
     m = FALLBACK_HEADER_RE.search(prompt)
     if m:
@@ -584,9 +677,14 @@ Supported Universal Actions:
    {"action": "replace", "find_text": "...", "replace_text": "..."}
    CRITICAL: Extract find_text and replace_text EXACTLY character-for-character. Do NOT paraphrase, do NOT alter capitalization, do NOT remove punctuation.
 
-2. Header and Footer:
-   {"action": "header", "new_text": "..."}
-   {"action": "footer", "new_text": "..."}
+2. Header and Footer (Supports 3 parts: 1=left, 2=center, 3=right, and page targeting: specific page number, "first", "odd", "even", or "all"):
+   {"action": "header", "new_text": "...", "part": 1|2|3|null, "page": 2|"all"|"first"|"odd"|"even"|null}
+   {"action": "footer", "new_text": "...", "part": 1|2|3|null, "page": 2|"all"|"first"|"odd"|"even"|null}
+   Examples:
+   - "Change first part of header to Confidential" -> {"action": "header", "new_text": "Confidential", "part": 1, "page": "all"}
+   - "Change center footer to Page {PAGE}" -> {"action": "footer", "new_text": "Page {PAGE}", "part": 2, "page": "all"}
+   - "Change 3rd part of header to Final on page 2" -> {"action": "header", "new_text": "Final", "part": 3, "page": 2}
+   - "Change left footer to Draft" -> {"action": "footer", "new_text": "Draft", "part": 1, "page": "all"}
 
 3. Heading styling:
    {"action": "style_headings", "font_size": 20, "bold": true, "italic": false, "color": "dark blue", "font_name": "Calibri", "level": null}

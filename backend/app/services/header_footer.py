@@ -124,6 +124,52 @@ def has_split(text) -> bool:
     return bool(text) and SPLIT_CHAR in text
 
 
+def split_3_parts(text: str) -> tuple[str, str, str]:
+    """(left, center, right) for a header/footer variant's text.
+    Uses SPLIT_CHAR ('\t') as section separator.
+    """
+    if not text:
+        return "", "", ""
+    parts = text.split(SPLIT_CHAR)
+    if len(parts) >= 3:
+        return parts[0].strip(), parts[1].strip(), SPLIT_CHAR.join(parts[2:]).strip()
+    elif len(parts) == 2:
+        return parts[0].strip(), "", parts[1].strip()
+    else:
+        return parts[0].strip(), "", ""
+
+
+def join_3_parts(left: str = "", center: str = "", right: str = "") -> str:
+    """Build a 3-section header/footer text from left, center, right."""
+    left = (left or "").strip()
+    center = (center or "").strip()
+    right = (right or "").strip()
+
+    if center:
+        return f"{left}{SPLIT_CHAR}{center}{SPLIT_CHAR}{right}"
+    elif right:
+        return f"{left}{SPLIT_CHAR}{right}"
+    return left
+
+
+def update_3_part_text(existing_text: str | None, part: int, new_val: str) -> str:
+    """Update part 1 (left), 2 (center), or 3 (right) of existing header/footer text,
+    preserving the other parts.
+    """
+    left, center, right = split_3_parts(existing_text or "")
+    if part == 1:
+        left = new_val.strip()
+    elif part == 2:
+        center = new_val.strip()
+    elif part == 3:
+        right = new_val.strip()
+    else:
+        return new_val.strip()
+
+    return join_3_parts(left, center, right)
+
+
+
 # ---------------------------------------------------------------------------
 # Field parsing
 # ---------------------------------------------------------------------------
@@ -193,6 +239,10 @@ def text_for_page(spec, page_number):
     """
     if not spec:
         return None
+    if spec.get(page_number) is not None:
+        return spec[page_number]
+    if spec.get(str(page_number)) is not None:
+        return spec[str(page_number)]
     if page_number == 1 and spec.get("first") is not None:
         return spec["first"]
     if spec.get("odd") is not None or spec.get("even") is not None:
@@ -480,6 +530,8 @@ def band_text(page, which="header", page_number=None, page_count=None,
         cells[-1] = _page_number_field(cells[-1], page_number, page_count)
         if len(cells) == 2:
             lines.append(join_parts(cells[0], cells[1]))
+        elif len(cells) >= 3:
+            lines.append(join_3_parts(cells[0], cells[1], cells[2]))
         else:
             lines.append(" ".join(cells))
     return "\n".join(line for line in lines if line)
@@ -924,30 +976,29 @@ def pdf_safe_text(text):
 
 
 def _zone_sections(text, page_number, page_count, title, filename):
-    """The rendered left and right sections of one variant's text."""
-    left_raw, right_raw = split_parts(text)
+    """The rendered left, center and right sections of one variant's text."""
+    left_raw, center_raw, right_raw = split_3_parts(text)
     return (render(pdf_safe_text(left_raw), page_number, page_count, title, filename),
+            render(pdf_safe_text(center_raw), page_number, page_count, title, filename),
             render(pdf_safe_text(right_raw), page_number, page_count, title, filename))
 
 
 def _zone_plan(sections, inner, alignment, fontname="helv", fontsize=10.0):
-    """Which box and alignment each section of a band is written into.
-
-    The right-hand section is measured rather than given half the column. A
-    midpoint split leaves the left section only half the text width, which on a
-    real report header is narrower than the subject line itself: a 302pt subject
-    in a 289pt box wraps onto a second row and pushes the header down into the
-    body. Measuring the right section and giving the left everything else keeps
-    both on one line, which is what a tab stop does in Word.
-
-    Falls back to the midpoint when the right section is too wide for that to
-    leave the left a usable column - but only when there is a left section to
-    protect. Measuring an empty left section as if it needed 35% of the column
-    handed a right-only footer half the text width, so a 300-character right
-    section could not be laid out at any legal size and was dropped.
-    """
+    """Which box and alignment each section of a band is written into."""
     left = sections.get("left", "")
+    center = sections.get("center", "")
     right = sections.get("right", "")
+
+    if center:
+        col_w = inner.width / 3.0
+        plan = []
+        if left.strip():
+            plan.append(("left", fitz.Rect(inner.x0, inner.y0, inner.x0 + col_w, inner.y1), fitz.TEXT_ALIGN_LEFT))
+        if center.strip():
+            plan.append(("center", fitz.Rect(inner.x0 + col_w, inner.y0, inner.x1 - col_w, inner.y1), fitz.TEXT_ALIGN_CENTER))
+        if right.strip():
+            plan.append(("right", fitz.Rect(inner.x1 - col_w, inner.y0, inner.x1, inner.y1), fitz.TEXT_ALIGN_RIGHT))
+        return tuple(plan)
 
     if right and not left.strip():
         return (("right", fitz.Rect(inner.x0, inner.y0, inner.x1, inner.y1),
@@ -987,15 +1038,12 @@ def write_pdf_zone(page, rect, text, page_number, page_count, fontname,
     When the old text was found it is replaced in its own vertical position, so
     an edited header stays on the same line instead of jumping to the top.
 
-    Text containing a tab is written as two sections: the part before the tab
-    flush against the left text margin and the part after it flush against the
-    right one, which is what "subject on the left, ID on the right" means on the
-    page.
+    Text containing a tab is written as two or three sections: left, center, right.
     """
     if text is None:
         return False
 
-    sections = dict(zip(("left", "right"),
+    sections = dict(zip(("left", "center", "right"),
                         _zone_sections(text, page_number, page_count, title, filename)))
     inner = _zone_box(page, rect, erased_box, which, fallback_column, fontsize,
                       body_ceiling)
@@ -1022,7 +1070,7 @@ def zone_fits(page, rect, text, erased_box, which, alignment, fontname, fontsize
     does not fit. Asking that question before erasing the old furniture is what
     keeps a too-long header from being wiped and replaced with nothing.
     """
-    sections = dict(zip(("left", "right"),
+    sections = dict(zip(("left", "center", "right"),
                         _zone_sections(text, page_number, page_count, title, filename)))
     inner = _zone_box(page, rect, erased_box, which, fallback_column, fontsize,
                       body_ceiling)
@@ -1216,7 +1264,7 @@ def write_docx_paragraph(paragraph, text, font_name=None, font_size=None,
     if alignment and alignment.lower() in ALIGNMENTS:
         paragraph.alignment = ALIGNMENTS[alignment.lower()]
 
-    left_raw, right_raw = split_parts(text)
+    left_raw, center_raw, right_raw = split_3_parts(text)
 
     def style(run):
         if font_name:
@@ -1233,11 +1281,35 @@ def write_docx_paragraph(paragraph, text, font_name=None, font_size=None,
             style(_add_field_run(paragraph, value,
                                  placeholder=field_value(value, 1, 1, title)))
 
-    if has_split(text):
+    margin = _right_margin_emu(paragraph)
+    if center_raw:
+        p_pr = paragraph._p.get_or_add_pPr()
+        for existing in p_pr.findall(qn("w:tabs")):
+            p_pr.remove(existing)
+
+        tabs = OxmlElement("w:tabs")
+        tab_center = OxmlElement("w:tab")
+        tab_center.set(qn("w:val"), "center")
+        tab_center.set(qn("w:pos"), str(int(margin / 2)))
+        tabs.append(tab_center)
+
+        tab_right = OxmlElement("w:tab")
+        tab_right.set(qn("w:val"), "right")
+        tab_right.set(qn("w:pos"), str(int(margin)))
+        tabs.append(tab_right)
+        p_pr.append(tabs)
+
+        emit(left_raw)
+        _add_tab_run(paragraph)
+        emit(center_raw)
+        if right_raw:
+            _add_tab_run(paragraph)
+            emit(right_raw)
+    elif right_raw:
         emit(left_raw)
         _add_tab_run(paragraph)
         emit(right_raw)
-        _set_right_tab(paragraph, _right_margin_emu(paragraph))
+        _set_right_tab(paragraph, margin)
     else:
         emit(text)
 

@@ -230,6 +230,7 @@ def apply_pdf_styling(
     doc_title: str = None,
     doc_filename: str = None,
     line_spacing: float = None,
+    target_page: int = None,
 ) -> bool:
     try:
         doc = _open_pdf(pdf_path)
@@ -261,6 +262,12 @@ def apply_pdf_styling(
             footer_even=footer_text_even,
             footer_first=footer_text_first,
         )["footer"]
+
+        if target_page is not None:
+            if header_text is not None:
+                header_spec = {target_page: header_text, "all": None}
+            if footer_text is not None:
+                footer_spec = {target_page: footer_text, "all": None}
 
         # "Apply to matching text only" narrows the change to pages whose current
         # band text matches what the editor was showing.

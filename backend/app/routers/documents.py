@@ -18,8 +18,9 @@ from RapidDoc.backend.app.database import db_conn
 from RapidDoc.backend.app.routers.auth import get_current_user
 from RapidDoc.backend.app.services.storage import storage_service
 import base64
+from RapidDoc.backend.app.services import header_footer as hf
 from RapidDoc.backend.app.services.docx_editor import (
-    apply_docx_styling, get_docx_images_count, get_docx_content, update_docx_content, find_replace_docx,
+    apply_docx_styling, get_docx_headers_footers, get_docx_images_count, get_docx_content, update_docx_content, find_replace_docx,
     find_text_variants, selective_replace_docx, iter_docx_body_items, get_docx_image_parts,
     get_docx_document_view, replace_docx_images, resize_docx_images,
     delete_docx_table_column, delete_docx_table_row, delete_docx_table, style_docx_headings, delete_docx_images,
@@ -27,7 +28,7 @@ from RapidDoc.backend.app.services.docx_editor import (
     update_docx_page_setup, insert_docx_page_break, apply_hierarchical_heading_numbers
 )
 from RapidDoc.backend.app.services.pdf_editor import (
-    apply_pdf_styling, get_pdf_images_count, get_pdf_content, update_pdf_content, find_replace_pdf,
+    apply_pdf_styling, get_pdf_headers_footers, get_pdf_images_count, get_pdf_content, update_pdf_content, find_replace_pdf,
     find_text_variants_pdf, selective_replace_pdf, replace_pdf_images, resize_pdf_images
 )
 from RapidDoc.backend.app.services.image_resolver import (
@@ -1794,37 +1795,151 @@ async def ai_command_endpoint(
 
         if action in ("header", "footer"):
             new_text = (intent.get("new_text") or "").strip()
-            if not new_text:
+            part = intent.get("part")
+            if isinstance(part, str):
+                part_low = part.lower().strip()
+                if part_low in ("1", "1st", "first", "left"):
+                    part = 1
+                elif part_low in ("2", "2nd", "second", "center", "centre", "middle", "mid"):
+                    part = 2
+                elif part_low in ("3", "3rd", "third", "right"):
+                    part = 3
+                else:
+                    try:
+                        part = int(part_low)
+                    except ValueError:
+                        part = None
+
+            page_scope = intent.get("page") or "all"
+            if isinstance(page_scope, str) and page_scope.isdigit():
+                page_scope = int(page_scope)
+
+            if not new_text and part is None:
                 return {"status": "success", "action": "unknown", "engine": intent.get("engine"), "message": f"I couldn't tell what new {action} text you want."}
+
             active_path, version_fields = ensure_edited_version(doc, db, action=f"AI {action} command")
-            success = False
+
+            # Read existing furniture to preserve unaffected parts and pages
+            if doc["file_type"] == "docx":
+                existing = await run_in_threadpool(get_docx_headers_footers, active_path)
+            else:
+                existing = await run_in_threadpool(get_pdf_headers_footers, active_path)
+
+            existing_all = (existing.get(f"{action}_odd") or
+                            (existing.get(f"{action}s") or [""])[0] if existing.get(f"{action}s") else "")
+            existing_first = existing.get(f"{action}_first")
+            existing_odd = existing.get(f"{action}_odd")
+            existing_even = existing.get(f"{action}_even")
+
+            kwargs = {}
+            part_name_str = "left" if part == 1 else ("center" if part == 2 else ("right" if part == 3 else ""))
+            part_desc = f"part {part} ({part_name_str})" if part else ""
+            page_desc = f" on page {page_scope}" if isinstance(page_scope, int) else (f" on {page_scope} pages" if page_scope != "all" else "")
+
+            if part in (1, 2, 3):
+                # Update only that part!
+                if page_scope in ("first", 1):
+                    base = existing_first if existing_first is not None else existing_all
+                    final_first = hf.update_3_part_text(base, part, new_text)
+                    kwargs[f"{action}_text_first"] = final_first
+                    if existing_all:
+                        kwargs[f"{action}_text"] = existing_all
+                    if existing_odd:
+                        kwargs[f"{action}_text_odd"] = existing_odd
+                    if existing_even:
+                        kwargs[f"{action}_text_even"] = existing_even
+                elif page_scope == "odd":
+                    base = existing_odd if existing_odd is not None else existing_all
+                    final_odd = hf.update_3_part_text(base, part, new_text)
+                    kwargs[f"{action}_text_odd"] = final_odd
+                    if existing_first is not None:
+                        kwargs[f"{action}_text_first"] = existing_first
+                    if existing_even is not None:
+                        kwargs[f"{action}_text_even"] = existing_even
+                elif page_scope == "even":
+                    base = existing_even if existing_even is not None else existing_all
+                    final_even = hf.update_3_part_text(base, part, new_text)
+                    kwargs[f"{action}_text_even"] = final_even
+                    if existing_first is not None:
+                        kwargs[f"{action}_text_first"] = existing_first
+                    if existing_odd is not None:
+                        kwargs[f"{action}_text_odd"] = existing_odd
+                elif isinstance(page_scope, int):
+                    # Specific page number
+                    if doc["file_type"] == "docx":
+                        if page_scope % 2 == 0:
+                            base = existing_even if existing_even is not None else existing_all
+                            kwargs[f"{action}_text_even"] = hf.update_3_part_text(base, part, new_text)
+                            if existing_odd:
+                                kwargs[f"{action}_text_odd"] = existing_odd
+                            if existing_first:
+                                kwargs[f"{action}_text_first"] = existing_first
+                        else:
+                            base = existing_odd if existing_odd is not None else existing_all
+                            kwargs[f"{action}_text_odd"] = hf.update_3_part_text(base, part, new_text)
+                            if existing_even:
+                                kwargs[f"{action}_text_even"] = existing_even
+                            if existing_first:
+                                kwargs[f"{action}_text_first"] = existing_first
+                    else:
+                        base = existing_all
+                        kwargs[f"{action}_text"] = hf.update_3_part_text(base, part, new_text)
+                        kwargs["target_page"] = page_scope
+                else:
+                    # All pages by default!
+                    final_text = hf.update_3_part_text(existing_all, part, new_text)
+                    kwargs[f"{action}_text"] = final_text
+                    if existing_first is not None:
+                        kwargs[f"{action}_text_first"] = hf.update_3_part_text(existing_first, part, new_text)
+                    if existing_odd is not None:
+                        kwargs[f"{action}_text_odd"] = hf.update_3_part_text(existing_odd, part, new_text)
+                    if existing_even is not None:
+                        kwargs[f"{action}_text_even"] = hf.update_3_part_text(existing_even, part, new_text)
+            else:
+                # Blanket replacement of whole header/footer
+                if page_scope in ("first", 1):
+                    kwargs[f"{action}_text_first"] = new_text
+                    if existing_all:
+                        kwargs[f"{action}_text"] = existing_all
+                elif page_scope == "odd":
+                    kwargs[f"{action}_text_odd"] = new_text
+                elif page_scope == "even":
+                    kwargs[f"{action}_text_even"] = new_text
+                elif isinstance(page_scope, int) and doc["file_type"] == "pdf":
+                    kwargs[f"{action}_text"] = new_text
+                    kwargs["target_page"] = page_scope
+                else:
+                    kwargs[f"{action}_text"] = new_text
+
             if doc["file_type"] == "docx":
                 success = await run_in_threadpool(
-                    apply_docx_styling, active_path, active_path,
-                    header_text=new_text if action == "header" else None,
-                    footer_text=new_text if action == "footer" else None,
+                    apply_docx_styling, active_path, active_path, **kwargs
                 )
             else:
                 success = await run_in_threadpool(
-                    apply_pdf_styling, active_path, active_path,
-                    header_text=new_text if action == "header" else None,
-                    footer_text=new_text if action == "footer" else None,
+                    apply_pdf_styling, active_path, active_path, **kwargs
                 )
+
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to update the document.")
+
+            msg_part = f" {part_desc}" if part_desc else ""
+            msg = f"Done — changed {action}{msg_part}{page_desc} to '{new_text}'."
             current_date = datetime.now().strftime("%Y-%m-%d")
             db.documents.update_one(
                 {"_id": ObjectId(doc_id)},
-                {"$push": {"edit_history": {"date": current_date, "action": f"Changed {action} to '{new_text}'"}},
+                {"$push": {"edit_history": {"date": current_date, "action": msg}},
                  "$set": version_fields}
             )
             return {
                 "status": "success",
                 "action": action,
+                "part": part,
+                "page": page_scope,
                 "intent": intent.get("intent"),
                 "engine": intent.get("engine"),
                 "new_text": new_text,
-                "message": f"Done — changed the {action} to '{new_text}'.",
+                "message": msg,
                 "changes": [{"paragraph": action.capitalize(), "old_text": "", "new_text": new_text}],
             }
 

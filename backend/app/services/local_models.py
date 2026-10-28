@@ -164,6 +164,17 @@ def _get_summarizer():
     )
 
 
+def summarizer_ready() -> bool:
+    """True when the summarizer brain is already loaded (no load penalty).
+
+    The hierarchical summarizer uses this to avoid stalling a long document on
+    a cold model load (~30s on CPU). If it is not warm yet, the caller uses the
+    instant extractive path instead of waiting.
+    """
+    slot, _ = _cache_slot("summarizer")
+    return slot["model"] is not None and slot["tokenizer"] is not None
+
+
 def _get_mcq_generator():
     """Returns (model, tokenizer) for the local BART MCQ generator."""
     return _get_seq2seq(
@@ -692,7 +703,7 @@ def tidy_summary(text: str) -> str:
     return "\n".join(ln for ln in lines if ln).strip()
 
 
-def summarize(text: str, max_new_tokens: int = None, min_new_tokens: int = 0):
+def summarize(text: str, max_new_tokens: int = None, min_new_tokens: int = 0, num_beams: int = None):
     """Abstractively summarize `text` with the local BART summarizer brain.
 
     Returns the summary string, or None on failure/empty output.
@@ -730,7 +741,9 @@ def summarize(text: str, max_new_tokens: int = None, min_new_tokens: int = 0):
 
         kwargs = {
             "max_length": gen_max,
-            "num_beams": max(1, int(settings.SUMMARIZER_NUM_BEAMS)),
+            "num_beams": max(1, int(
+                num_beams if num_beams is not None else settings.SUMMARIZER_NUM_BEAMS
+            )),
             "length_penalty": float(settings.SUMMARIZER_LENGTH_PENALTY),
             "no_repeat_ngram_size": int(settings.SUMMARIZER_NO_REPEAT_NGRAM_SIZE),
             "early_stopping": True,

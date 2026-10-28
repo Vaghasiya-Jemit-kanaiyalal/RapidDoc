@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 from RapidDoc.backend.app.config import settings
-from RapidDoc.backend.app.routers import auth, documents
+from RapidDoc.backend.app.routers import auth, documents, support
 from RapidDoc.backend.app.routers import preview
 from RapidDoc.backend.app.routers import ai as ai_router
 
@@ -66,6 +66,7 @@ app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(preview.router)
 app.include_router(ai_router.router)
+app.include_router(support.router)
 
 
 # Custom exception handler for standard ConnectionError (database down, etc.)
@@ -87,6 +88,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 @app.get("/")
+@app.get("/health")
 async def root():
     # Simple endpoint to check if backend is running
     from RapidDoc.backend.app.database import db_conn

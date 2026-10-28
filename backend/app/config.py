@@ -56,6 +56,17 @@ class Settings(BaseSettings):
     # never blow past the model's 1024-token window in a confusing way.
     SUMMARIZER_MAX_INPUT_CHARS: int = 12000
 
+    # Map phase of the hierarchical summarizer. Running BART on every chunk of
+    # a 100-page document is ~10s per chunk on CPU (59 chunks ~= 10 minutes),
+    # which is useless to a waiting user. Only a few representative chunks use
+    # the neural model; every other chunk is summarized extractively (instant,
+    # complete coverage). The time budget is a hard stop even if the model is
+    # slower than measured.
+    SUMMARIZER_MAX_NEURAL_CHUNKS: int = 4
+    SUMMARIZER_MAP_TIME_BUDGET_SECONDS: float = 45.0
+    SUMMARIZER_CHUNK_NUM_BEAMS: int = 1
+    SUMMARIZER_CHUNK_MAX_NEW_TOKENS: int = 96
+
     # --- BART MCQ generator ----------------------------------------------
     MCQ_MAX_INPUT_TOKENS: int = 512
     MCQ_MAX_GEN_TOKENS: int = 128
@@ -71,6 +82,29 @@ class Settings(BaseSettings):
     MCQ_MIN_PASSAGE_CHARS: int = 120
     # Characters of document text handed to the model per generated question.
     MCQ_PASSAGE_CHARS: int = 1200
+
+    OTP_EXPIRE_MINUTES: int = 10
+    OTP_MAX_ATTEMPTS: int = 3
+    OTP_RESEND_COOLDOWN_SECONDS: int = 45
+    # When no SMTP server is configured, the OTP is returned in the API
+    # response and shown in the UI so local/demo testing still works.
+    OTP_DEV_MODE: bool = True
+
+    # --- SMTP (password-reset OTP delivery) --------------------------------
+    # Set these in .env to send real emails. Example for Gmail:
+    #   SMTP_HOST=smtp.gmail.com
+    #   SMTP_PORT=587
+    #   SMTP_USER=youraddress@gmail.com
+    #   SMTP_PASSWORD=<16-char app password>
+    #   SMTP_FROM=youraddress@gmail.com
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_USE_TLS: bool = True   # STARTTLS on port 587
+    SMTP_USE_SSL: bool = False  # implicit TLS on port 465
+    SMTP_TIMEOUT: int = 15
 
     @field_validator("JWT_SECRET_KEY")
     @classmethod

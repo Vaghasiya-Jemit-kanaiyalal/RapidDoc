@@ -6,15 +6,20 @@ import { AuthSwitch, Login, Register } from './components/Auth';
 import { CelebrationSparkles } from './components/ui/CelebrationSparkles';
 import { UploadZone } from './components/Dashboard/UploadZone';
 import { DocumentList } from './components/Dashboard/DocumentList';
+import { ResumeEditingSection } from './components/Dashboard/ResumeEditingSection';
 import { DocumentListSkeleton } from './components/Editor/EditorSkeletons';
 import { DocumentWorkspace } from './components/Editor/DocumentWorkspace';
 import { downloadDocument } from './utils/download';
+import PrivacyPolicy from './components/Legal/PrivacyPolicy';
+import TermsOfService from './components/Legal/TermsOfService';
+import CookiePolicy from './components/Legal/CookiePolicy';
+import HelpCenter from './components/Legal/HelpCenter';
 import logo from './assets/logo.png';
 import loadingEffect from './assets/laoding_effect.png';
 import FloatingOrbs from './components/FloatingOrbs';
 import { DynamicMorphingPipeline } from './components/Hero/DynamicMorphingPipeline';
 import {
-  Sparkles, FileText, ArrowRight, Play, LogOut,
+  Sparkles, FileText, ArrowRight, LogOut,
   Home, Quote, Bold, Italic, Underline, Pen, Send, MessagesSquare, Image,
   BarChart2, Star, FileEdit, Brain, Lightbulb, Download, Upload, Zap, CheckCircle2,
   Shield, Globe, Search, Replace, Palette, Languages, BookOpen, HelpCircle,
@@ -716,7 +721,7 @@ const LandingPage = ({ onNavigate }) => {
               <ul className="space-y-3">
                 <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Documentation</a></li>
                 <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">API Reference</a></li>
-                <li><a href="#help" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Help Center</a></li>
+                <li><button onClick={() => handleNavigate('help')} className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium text-left">Help Center</button></li>
                 <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Changelog</a></li>
               </ul>
             </div>
@@ -726,9 +731,9 @@ const LandingPage = ({ onNavigate }) => {
               <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">LEGAL</h4>
               <div className="w-6 h-[2.5px] bg-[#365CFF] rounded-full mt-1.5 mb-4"></div>
               <ul className="space-y-3">
-                <li><a href="#privacy" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Privacy Policy</a></li>
-                <li><a href="#terms" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Terms of Service</a></li>
-                <li><a href="#" className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium">Cookie Policy</a></li>
+                <li><button onClick={() => handleNavigate('privacy')} className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium text-left">Privacy Policy</button></li>
+                <li><button onClick={() => handleNavigate('terms')} className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium text-left">Terms of Service</button></li>
+                <li><button onClick={() => handleNavigate('cookies')} className="text-sm text-slate-600 hover:text-[#365CFF] transition-colors font-medium text-left">Cookie Policy</button></li>
               </ul>
             </div>
           </div>
@@ -840,7 +845,6 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
   const isFinalizedDoc = (d) => (d.pipeline_stage || 1) === 4 || d.pipeline_status === 'Finalized';
   const finalizedCount = documents.filter(isFinalizedDoc).length;
   const activePipelines = documents.filter(d => !isFinalizedDoc(d));
-  const latestActive = activePipelines[0];
 
   // Stat card data with brand-consistent colors
   const statCards = [
@@ -1014,52 +1018,6 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
           ))}
         </motion.div>
 
-        {/* ── Active Pipeline Resume Banner ── */}
-        {latestActive && (
-          <motion.section 
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="bg-gradient-to-r from-brand-600 via-indigo-600 to-brand-700 rounded-2xl p-5 sm:p-6 text-white shadow-soft-blue relative overflow-hidden"
-          >
-            {/* Background decoration */}
-            <div className="absolute inset-0 pointer-events-none" aria-hidden="true">
-              <div className="absolute -top-10 -right-10 w-40 h-40 bg-white/10 rounded-full blur-[50px]" />
-              <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(white 1px, transparent 1px)', backgroundSize: '20px 20px' }} />
-            </div>
-
-            <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="space-y-2 text-left">
-                <div className="flex items-center gap-2">
-                  <span className="bg-white/20 text-white text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full backdrop-blur-md">
-                    Active Pipeline
-                  </span>
-                  <span className="text-xs text-blue-100 font-bold">
-                    Stage {latestActive.pipeline_stage || 1} of 4 ({latestActive.completion_percent || 25}%)
-                  </span>
-                </div>
-                <h3 className="text-lg font-extrabold text-white truncate max-w-md">{latestActive.name}</h3>
-                <div className="w-full sm:w-64 bg-white/20 rounded-full h-2 overflow-hidden border border-white/15">
-                  <div 
-                    className="h-full bg-emerald-400 rounded-full transition-all duration-500" 
-                    style={{ width: `${latestActive.completion_percent || 25}%` }}
-                  />
-                </div>
-              </div>
-
-              <motion.button
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-                onClick={() => onSelectDocument(latestActive)}
-                className="px-5 py-2.5 bg-white text-brand-700 hover:bg-brand-50 font-extrabold rounded-xl text-sm flex items-center gap-2 shadow-lg transition duration-200 shrink-0 cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-brand-700" />
-                <span>Resume</span>
-              </motion.button>
-            </div>
-          </motion.section>
-        )}
-
         {/* ── Upload Zone ── */}
         <motion.section 
           initial={{ opacity: 0, y: 15 }}
@@ -1073,6 +1031,12 @@ const Dashboard = ({ token, user, onLogout, onSelectDocument, onHome }) => {
           </h3>
           <UploadZone token={token} onUploadSuccess={handleUploadSuccess} />
         </motion.section>
+
+        {/* Resume Editing Section ── */}
+        <ResumeEditingSection
+          documents={documents}
+          onSelectDocument={onSelectDocument}
+        />
 
         {/* ── Document List ── */}
         <motion.section 
@@ -1213,6 +1177,10 @@ const parseRouteFromUrl = () => {
   if (hash === 'register' || path === 'register' || hash === 'signup' || path === 'signup') return { view: 'register' };
   if (hash === 'dashboard' || path === 'dashboard') return { view: 'dashboard' };
   if (hash === 'workspace' || path === 'workspace') return { view: 'workspace' };
+  if (hash === 'privacy' || path === 'privacy') return { view: 'privacy' };
+  if (hash === 'terms' || path === 'terms') return { view: 'terms' };
+  if (hash === 'cookies' || path === 'cookies' || hash === 'cookie-policy' || path === 'cookie-policy') return { view: 'cookies' };
+  if (hash === 'help' || path === 'help' || hash === 'help-center' || path === 'help-center') return { view: 'help' };
   
   // Hash sections for landing page (features, how, ai, testimonials)
   return { view: 'landing', section: hash || '' };
@@ -1292,12 +1260,16 @@ const MainApp = () => {
     else if (view === 'register') targetUrl = '/#register';
     else if (view === 'dashboard') targetUrl = '/#dashboard';
     else if (view === 'workspace') targetUrl = '/#workspace';
+    else if (view === 'privacy') targetUrl = '/#privacy';
+    else if (view === 'terms') targetUrl = '/#terms';
+    else if (view === 'cookies') targetUrl = '/#cookies';
+    else if (view === 'help') targetUrl = '/#help';
     else if (section && section !== 'hero') targetUrl = `/#${section}`;
 
     try {
       window.history.pushState({ view, section }, '', targetUrl);
     } catch (e) {
-      window.location.hash = (section && section !== 'hero') ? section : view;
+      window.location.hash = (view === 'privacy') ? 'privacy' : (view === 'terms') ? 'terms' : ((section && section !== 'hero') ? section : view);
     }
     
     setCurrentView(view);
@@ -1320,6 +1292,15 @@ const MainApp = () => {
 
   const handleSelectDocument = (doc) => {
     setSelectedDoc(doc);
+    // Best effort: notify backend that this document was opened
+    try {
+      fetch(`${API_URL}/documents/${doc.id}/open`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      }).catch(() => {});
+    } catch (e) {
+      // ignore
+    }
     handleNavigate('workspace');
   };
 
@@ -1345,6 +1326,14 @@ const MainApp = () => {
 
   const renderCurrentView = () => {
     switch (currentView) {
+      case 'privacy':
+        return <PrivacyPolicy onNavigate={handleNavigate} />;
+      case 'terms':
+        return <TermsOfService onNavigate={handleNavigate} />;
+      case 'cookies':
+        return <CookiePolicy onNavigate={handleNavigate} />;
+      case 'help':
+        return <HelpCenter onNavigate={handleNavigate} user={user} />;
       case 'login':
       case 'register':
         return (
@@ -1353,7 +1342,7 @@ const MainApp = () => {
             notice={sessionNotice} 
             onNoticeDismiss={() => setSessionNotice('')} 
             onToggleMode={(mode) => {
-              if (mode === 'landing' || mode === 'dashboard') {
+              if (mode === 'landing' || mode === 'dashboard' || mode === 'privacy' || mode === 'terms') {
                 handleNavigate(mode);
               }
             }} 
@@ -1368,7 +1357,7 @@ const MainApp = () => {
               notice={sessionNotice} 
               onNoticeDismiss={() => setSessionNotice('')} 
               onToggleMode={(mode) => {
-                if (mode === 'landing' || mode === 'dashboard') {
+                if (mode === 'landing' || mode === 'dashboard' || mode === 'privacy' || mode === 'terms') {
                   handleNavigate(mode);
                 }
               }} 

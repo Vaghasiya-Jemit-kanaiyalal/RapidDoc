@@ -87,32 +87,51 @@ def looks_like_code(line: str) -> bool:
         return True
 
     lowered = stripped.lower()
-    if any(lowered.startswith(op) for op in _STATEMENT_OPENERS):
+    words = stripped.split()
+    has_spaces = " " in stripped
+    symbol_chars = sum(1 for ch in stripped if ch in _SYMBOLS)
+    symbol_ratio = symbol_chars / max(len(stripped), 1)
+    letters = sum(1 for ch in stripped if ch.isalpha())
+    letter_ratio = letters / max(len(stripped), 1)
+
+    # A full sentence that ends in punctuation and is mostly letters is prose,
+    # even if it contains parenthetical values or camelCase field names. This is
+    # the regression that dropped "completed (Boolean, default false), createdAt
+    # (Date, default Date.now)." from a report.
+    if (
+        len(words) >= 5
+        and stripped.endswith((".", "!", "?"))
+        and letter_ratio >= 0.55
+        and symbol_ratio < 0.20
+    ):
+        return False
+
+    if any(re.match(rf"^{re.escape(op.strip())}\b", lowered) for op in _STATEMENT_OPENERS):
         # "Return the value of x" is a sentence, "return value of x" is not.
         return True
 
     if _TRAILING_COLON.match(stripped):
         return True
 
-    words = stripped.split()
-    spaced = sum(1 for w in words if " " in w)
-    symbol_chars = sum(1 for ch in stripped if ch in _SYMBOLS)
-    symbol_ratio = symbol_chars / max(len(stripped), 1)
-
     # Dense punctuation and no multi-word phrase: code.
-    if symbol_ratio > 0.30 and spaced == 0:
+    if symbol_ratio > 0.30 and not has_spaces:
         return True
     if symbol_ratio > 0.45:
         return True
 
     # Several call expressions, no sentence: `df.head().info() df.describe()`.
     calls = len(_BRACKET_CALL.findall(stripped))
-    if calls >= 2 and not re.search(r"[.!?:]\s", stripped):
+    prose_markers = re.search(
+        r"\b(?:the|and|with|from|that|this|these|those|were|was|is|are|for|of|to|in|on|by|as)\b",
+        lowered,
+    )
+    if calls >= 2 and not prose_markers and not re.search(r"[.!?:]\s*$", stripped):
         return True
 
-    # One call with arguments and no spaces at all: `sns.countplot(x='Churn')`.
-    if spaced == 0 and "(" in stripped and ")" in stripped:
-        if not re.search(r"[.!?:]\s", stripped):
+    # A call expression with arguments and no sentence structure:
+    # `sns.countplot(x='Churn', data=df)`.
+    if "(" in stripped and ")" in stripped and not prose_markers:
+        if not re.search(r"[.!?]\s*$", stripped):
             return True
 
     # An assignment whose right-hand side is not a sentence.
@@ -120,11 +139,11 @@ def looks_like_code(line: str) -> bool:
         return True
 
     # `df.shape`, `model.summary`: an identifier chain on its own.
-    if len(stripped) < 40 and " " not in stripped and _DOTTED_CHAIN.fullmatch(stripped):
+    if len(stripped) < 40 and not has_spaces and _DOTTED_CHAIN.fullmatch(stripped):
         return True
 
     # camelCase/PascalCase identifiers are code with no spaces, e.g. `setxlabel()`.
-    if spaced == 0 and _CAMEL_IDENT.search(stripped):
+    if not has_spaces and _CAMEL_IDENT.search(stripped):
         return True
 
     # Indented continuation of a previous statement.

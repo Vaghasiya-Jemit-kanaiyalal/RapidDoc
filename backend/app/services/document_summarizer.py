@@ -27,20 +27,32 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from RapidDoc.backend.app.config import settings
-from RapidDoc.backend.app.services.document_text import clean_prose, split_prose_sentences
-from RapidDoc.backend.app.services.local_models import summarize as local_model_summarize
-from RapidDoc.backend.app.services.text_polish import ensure_sentence, split_sentences
+from RapidDoc.backend.app.services.document_text import clean_prose
+from RapidDoc.backend.app.services.local_models import (
+    summarizer_ready,
+    summarize as local_model_summarize,
+)
+from RapidDoc.backend.app.services.summary_text import (
+    clean_inline,
+    clean_title,
+    is_outcome_sentence,
+    is_title_only,
+    looks_like_heading,
+    normalize_extracted_text,
+    sentence_key,
+    summary_sentences,
+)
+from RapidDoc.backend.app.services.text_polish import ensure_sentence
 
 logger = logging.getLogger(__name__)
 
-# Structural heading detection
-_HEADING_REGEX = re.compile(
-    r"^(?:#{1,6}\s+|(?:\d+[\.\)]\s+)?(?:Abstract|Introduction|Background|Objective|Scope|"
-    r"Methodology|Implementation|System Architecture|Design|Requirements|Analysis|"
-    r"Findings|Results|Evaluation|Discussion|Performance|Security|Challenges|"
-    r"Recommendations|Conclusion|Summary|Future Work|Appendix|References)\b)",
+_CONCLUSION_TITLE_RE = re.compile(
+    r"\b(?:conclusion|summary|outcomes?|results?|findings?|future work|recommendations?)\b",
     re.IGNORECASE,
 )
+# Sections whose content is already carried by ## Conclusion / ## Overview, and
+# should not also be mined for key points or section highlights.
+_SKIP_SECTION_TITLE_RE = re.compile(r"\b(?:conclusions?|summary|outcomes?)\b", re.IGNORECASE)
 
 _NUMERICAL_OR_METRIC_RE = re.compile(
     r"\b(?:\d+(?:\.\d+)?%|\$\d+(?:,\d+)*(?:\.\d+)?|\d+(?:,\d+)+(?:\.\d+)?|\d+\s*(?:ms|sec|min|hours?|days?|MB|GB|KB|TB|users?|records?|queries|tokens?))\b",
@@ -88,11 +100,11 @@ def segment_document_into_sections(text: str) -> List[Tuple[str, str]]:
                 current_lines.append("")
             continue
 
-        # Check if line looks like a section heading (short, matching heading pattern or Markdown #)
-        if len(line_stripped) <= 100 and (_HEADING_REGEX.match(line_stripped) or line_stripped.startswith("#")):
+        # Check if line looks like a section heading (short, canonical heading or Markdown #)
+        if looks_like_heading(line_stripped):
             if any(l.strip() for l in current_lines):
                 sections.append((current_title, current_lines))
-            current_title = re.sub(r"^#+\s*", "", line_stripped)
+            current_title = clean_title(line_stripped)
             current_lines = []
         else:
             current_lines.append(line_stripped)
@@ -188,8 +200,8 @@ def create_chunks_for_document(
 def extract_key_metrics_and_dates(text: str) -> List[str]:
     """Find specific quantitative metrics, dates, and named entities."""
     findings = []
-    for sentence in split_sentences(text):
-        s_clean = sentence.strip()
+    for sentence in summary_sentences(text):
+        s_clean = clean_inline(sentence)
         if len(s_clean) < 25 or len(s_clean) > 200:
             continue
         has_metric = bool(_NUMERICAL_OR_METRIC_RE.search(s_clean))
@@ -203,13 +215,17 @@ def extract_key_metrics_and_dates(text: str) -> List[str]:
     return findings
 
 
-def score_and_extract_key_sentences(text: str, max_sentences: int = 3) -> List[str]:
+def score_and_extract_key_sentences(
+    text: str,
+    max_sentences: int = 3,
+    skip_titles: bool = False,
+) -> List[str]:
     """Score sentences based on content density, key terms, and positional importance."""
-    sentences = [s.strip() for s in split_sentences(text) if len(s.strip()) >= 25]
+    sentences = summary_sentences(text, skip_titles=skip_titles)
     if not sentences:
         return []
 
-    words_all = re.findall(r"[A-Za-z][\w'-]{2,}", text.lower())
+    words_all = re.findall(r"[A-Za-z][\w'-]{2,}", " ".join(sentences).lower())
     freq: Dict[str, int] = {}
     for w in words_all:
         freq[w] = freq.get(w, 0) + 1
@@ -234,22 +250,33 @@ def score_and_extract_key_sentences(text: str, max_sentences: int = 3) -> List[s
     # Pick top sentences and restore their natural chronological flow
     chosen = scored[:max_sentences]
     chosen.sort(key=lambda item: item[1])
-    return [ensure_sentence(item[2]) for item in chosen]
+    return [ensure_sentence(clean_inline(item[2])) for item in chosen]
 
 
-def summarize_single_chunk(chunk: DocumentChunk) -> str:
-    """Summarize an individual chunk using local model if loaded, falling back to extractive representation."""
-    # Attempt local neural generation first
-    try:
-        model_out = local_model_summarize(chunk.text, max_new_tokens=96)
-        if model_out and len(model_out.split()) >= 6:
-            return model_out.strip()
-    except Exception as exc:
-        logger.debug("Local neural chunk summarization skipped: %s", exc)
+def summarize_single_chunk(chunk: DocumentChunk, use_neural: bool = True) -> str:
+    """Summarize an individual chunk.
 
-    # Robust extractive section summarization
-    sentences = score_and_extract_key_sentences(chunk.text, max_sentences=2)
-    return " ".join(sentences) if sentences else chunk.text[:200]
+    ``use_neural`` is opt-in: the neural model costs seconds per chunk, so the
+    long-document pipeline only spends it on a small representative sample and
+    uses the instant extractive path everywhere else.
+    """
+    if use_neural:
+        try:
+            model_out = local_model_summarize(
+                chunk.text,
+                max_new_tokens=int(settings.SUMMARIZER_CHUNK_MAX_NEW_TOKENS),
+                num_beams=int(settings.SUMMARIZER_CHUNK_NUM_BEAMS),
+            )
+            if model_out:
+                cleaned = clean_inline(model_out)
+                if len(cleaned.split()) >= 6 and not is_title_only(cleaned):
+                    return ensure_sentence(cleaned)
+        except Exception as exc:
+            logger.debug("Local neural chunk summarization skipped: %s", exc)
+
+    # Robust extractive section summarization (milliseconds, always available)
+    sentences = score_and_extract_key_sentences(chunk.text, max_sentences=2, skip_titles=True)
+    return clean_inline(" ".join(sentences)) if sentences else ""
 
 
 def categorize_finding(finding: str) -> str:
@@ -278,6 +305,49 @@ def categorize_finding(finding: str) -> str:
     return "Key Finding"
 
 
+def _sentence_keys(sentences: List[str]) -> set:
+    return {sentence_key(s) for s in sentences if s and sentence_key(s)}
+
+
+def _matches_any(sentence: str, keys: set) -> bool:
+    """Near-duplicate check against normalized sentence keys."""
+    key = sentence_key(sentence)
+    if not key:
+        return True
+    for other in keys:
+        if not other:
+            continue
+        if key == other:
+            return True
+        if min(len(key), len(other)) >= 50 and (key.startswith(other) or other.startswith(key)):
+            return True
+    return False
+
+
+def _extract_conclusion(chunks: List[DocumentChunk], full_text: str, overview: List[str]) -> List[str]:
+    """Prefer a section actually titled Conclusion/Summary/Results.
+
+    Falling back to "the last chunk" is what made a document's Problem Statement
+    reappear as its conclusion when the PDF extraction placed that section last.
+    """
+    overview_keys = _sentence_keys(overview)
+    for chunk in reversed(chunks):
+        if not _CONCLUSION_TITLE_RE.search(clean_title(chunk.title)):
+            continue
+        sentences = score_and_extract_key_sentences(chunk.text, max_sentences=2, skip_titles=True)
+        sentences = [s for s in sentences if not _matches_any(s, overview_keys)]
+        if sentences:
+            return sentences[:2]
+
+    # No titled conclusion: use the document tail, preferring outcome sentences.
+    tail = full_text[-2500:]
+    sentences = score_and_extract_key_sentences(tail, max_sentences=4, skip_titles=True)
+    outcomes = [s for s in sentences if is_outcome_sentence(s)]
+    pool = outcomes or sentences
+    pool = [s for s in pool if not _matches_any(s, overview_keys)]
+    return pool[:2]
+
+
 def synthesize_markdown_summary(
     doc_title: str,
     chunks: List[DocumentChunk],
@@ -287,10 +357,23 @@ def synthesize_markdown_summary(
     length_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Reduce and synthesize intermediate chunk summaries into a cohesive, structured Markdown document."""
-    # 1. Overview Synthesis (Context, main purpose from opening chunks)
-    opening_text = chunks[0].text if chunks else full_text[:1200]
-    overview_sentences = score_and_extract_key_sentences(opening_text, max_sentences=2)
-    overview_paragraph = " ".join(overview_sentences) if overview_sentences else f"Comprehensive analysis of {doc_title}."
+    # 1. Overview: first substantive section, skipping titles/metadata such as
+    #    "Subject: ...", a course header, or "Practical 5: ...".
+    overview_sentences: List[str] = []
+    for chunk in chunks:
+        found = score_and_extract_key_sentences(chunk.text, max_sentences=2, skip_titles=True)
+        if found:
+            overview_sentences = found[:2]
+            break
+    if not overview_sentences:
+        overview_sentences = score_and_extract_key_sentences(
+            full_text[:1200], max_sentences=2, skip_titles=True
+        )
+    overview_paragraph = (
+        clean_inline(" ".join(overview_sentences))
+        if overview_sentences
+        else f"Comprehensive analysis of {clean_title(doc_title)}."
+    )
 
     # Parse length hint for targeted bullet count or concise scope
     target_points_count = 8
@@ -306,54 +389,90 @@ def synthesize_markdown_summary(
         elif "detailed" in hint_str or "full" in hint_str:
             target_points_count = 10
 
-    # 2. Key Points Synthesis (Distributed across beginning, middle, and later parts of the document)
+    # 2. Key Points: one representative statement per section, distributed
+    #    across the whole document. Never reuse the overview or a title line.
+    overview_keys = _sentence_keys(overview_sentences)
+    seen_points = set(overview_keys)
     key_points: List[str] = []
-    seen_points = set()
+
+    # A short report has few sections; take a little more from each so its key
+    # requirements are not reduced to one bullet. Long documents stay at one.
+    if len(chunks) <= 10:
+        per_chunk = 5
+    elif len(chunks) <= 25:
+        per_chunk = 2
+    else:
+        per_chunk = 1
 
     for chunk in chunks:
-        # Extract 1 representative statement from every chunk
-        pts = score_and_extract_key_sentences(chunk.text, max_sentences=1)
-        for p in pts:
-            p_clean = p.rstrip(".")
-            # Avoid duplicate or near-identical bullet points
-            norm = re.sub(r"[^a-z0-9]", "", p_clean.lower()[:40])
-            if norm not in seen_points:
-                seen_points.add(norm)
-                key_points.append(p_clean)
+        if _SKIP_SECTION_TITLE_RE.search(clean_title(chunk.title)):
+            continue
+        pts = score_and_extract_key_sentences(
+            chunk.text,
+            max_sentences=per_chunk,
+            skip_titles=True,
+        )
+        for point in pts:
+            point = clean_inline(point)
+            if not point or is_title_only(point) or _matches_any(point, seen_points):
+                continue
+            seen_points.add(sentence_key(point))
+            key_points.append(point.rstrip("."))
 
-    # Cap key points at targeted points count spanning the document
+    # 3. Conclusion: a real Conclusion/Summary/Results section, otherwise the
+    #    document tail. Never reuse a Problem Statement as the conclusion.
+    conclusion_sentences = _extract_conclusion(chunks, full_text, overview_sentences)
+
+    # If a sentence appears in both, the conclusion is the better home for it.
+    conclusion_keys = _sentence_keys(conclusion_sentences)
+    if conclusion_keys:
+        key_points = [p for p in key_points if not _matches_any(p, conclusion_keys)]
+
     if len(key_points) > target_points_count:
-        # Sample evenly across document chunks
-        indices = [int(i * (len(key_points) - 1) / (target_points_count - 1)) for i in range(target_points_count)]
+        indices = [
+            int(i * (len(key_points) - 1) / (target_points_count - 1))
+            for i in range(target_points_count)
+        ]
         key_points = [key_points[i] for i in sorted(set(indices))]
 
-    # 3. Key Findings, Metrics, & Dates across the document
+    if conclusion_sentences:
+        conclusion_paragraph = clean_inline(" ".join(conclusion_sentences[:2]))
+    elif key_points:
+        last_point = key_points.pop()
+        conclusion_paragraph = ensure_sentence(clean_inline("Overall, " + last_point[:1].lower() + last_point[1:]))
+    else:
+        conclusion_paragraph = "The document has been summarized in full."
+
+    # 4. Key Findings, Metrics, & Dates across the document
     metrics_and_dates = extract_key_metrics_and_dates(full_text)
 
-    # 4. Section-by-Section Breakdown (Ensures every part is visible)
+    # 5. Section-by-Section Breakdown (sampled across the whole document)
     section_breakdowns: List[Tuple[str, str]] = []
+    skip_highlight_keys = overview_keys | conclusion_keys
     for chunk in chunks:
-        summary_body = chunk.intermediate_summary or summarize_single_chunk(chunk)
-        if summary_body:
-            section_breakdowns.append((chunk.title, summary_body))
-
-    # 5. Conclusion & Outcomes (Directly derived from the final sections/chunks)
-    terminal_chunks = [c for c in chunks if c.is_terminal] or [chunks[-1]] if chunks else []
-    conclusion_text = terminal_chunks[-1].text if terminal_chunks else full_text[-1200:]
-    conclusion_sentences = score_and_extract_key_sentences(conclusion_text, max_sentences=2)
-    conclusion_paragraph = " ".join(conclusion_sentences) if conclusion_sentences else "Document analysis and outcomes successfully processed."
+        title = clean_title(chunk.title)
+        if _SKIP_SECTION_TITLE_RE.search(title):
+            continue
+        summary_body = chunk.intermediate_summary or summarize_single_chunk(chunk, use_neural=False)
+        summary_body = clean_inline(summary_body)
+        if not summary_body or is_title_only(summary_body):
+            continue
+        if _matches_any(summary_body, skip_highlight_keys):
+            continue
+        section_breakdowns.append((title, summary_body))
 
     # Build the Markdown Document
+    display_title = clean_inline(doc_title or "Document") or "Document"
     md_lines: List[str] = [
-        f"# Document Summary: {doc_title}",
+        f"# Document Summary: {display_title}",
         "",
         "## Overview",
-        f"> **Executive Brief**: {overview_paragraph}",
+        f"> **Executive Brief**: {clean_inline(overview_paragraph)}",
         "",
         "## Key Points",
     ]
     for pt in key_points:
-        md_lines.append(f"- {pt}")
+        md_lines.append(f"- {clean_inline(pt)}")
     md_lines.append("")
 
     if metrics_and_dates:
@@ -361,17 +480,30 @@ def synthesize_markdown_summary(
         max_metrics = 4 if is_brief else 6
         for finding in metrics_and_dates[:max_metrics]:
             cat = categorize_finding(finding)
-            md_lines.append(f"- **{cat}**: {finding}")
+            md_lines.append(f"- **{clean_inline(cat)}**: {clean_inline(finding)}")
         md_lines.append("")
 
     if len(section_breakdowns) > 1 and not is_brief:
         md_lines.append("## Section Highlights")
-        for title, s_sum in section_breakdowns:
-            md_lines.append(f"- **{title}**: {s_sum}")
+        # One bullet per chunk is unreadable on a 100-page document (and made
+        # the "summary" tens of thousands of characters long). Sample evenly so
+        # the beginning, middle and end are represented. Full coverage is still
+        # carried by the Key Points and metrics extracted from every chunk.
+        max_highlights = 12
+        if len(section_breakdowns) > max_highlights:
+            picks = {
+                round(i * (len(section_breakdowns) - 1) / (max_highlights - 1))
+                for i in range(max_highlights)
+            }
+            highlights = [section_breakdowns[i] for i in sorted(picks)]
+        else:
+            highlights = section_breakdowns
+        for title, s_sum in highlights:
+            md_lines.append(f"- **{clean_title(title)}**: {clean_inline(s_sum)}")
         md_lines.append("")
 
     md_lines.append("## Conclusion")
-    md_lines.append(conclusion_paragraph)
+    md_lines.append(clean_inline(conclusion_paragraph))
 
     final_markdown = "\n".join(md_lines).strip()
     elapsed_sec = round(time.time() - start_time, 2)
@@ -403,8 +535,9 @@ def generate_complete_document_summary(
     raw_text = (text or "").strip()
     original_char_count = len(raw_text)
 
-    # 1. Clean prose while retaining substantive content
-    cleaned = clean_prose(raw_text)
+    # 1. Clean code out, then repair PDF-style hard wraps/page furniture while
+    #    retaining substantive content.
+    cleaned = normalize_extracted_text(clean_prose(raw_text))
     if not cleaned or len(cleaned) < 30:
         logger.warning("Document summarizer received text with no readable prose (chars=%d).", original_char_count)
         return {
@@ -425,9 +558,42 @@ def generate_complete_document_summary(
         original_char_count, len(cleaned), len(chunks)
     )
 
-    # 3. Map Phase: Summarize every chunk
+    # 3. Map Phase: summarize every chunk. The neural model is only used for a
+    #    small, evenly-spread sample (and only if it is already warm); the rest
+    #    are extractive. This keeps a 100-page document to seconds instead of
+    #    the ~12 minutes a per-chunk BART pass used to take on CPU.
+    neural_cap = max(0, int(settings.SUMMARIZER_MAX_NEURAL_CHUNKS))
+    neural_budget = 0.0
+    neural_indices = set()
+    if settings.AI_USE_LOCAL_MODELS and neural_cap and summarizer_ready():
+        neural_budget = float(settings.SUMMARIZER_MAP_TIME_BUDGET_SECONDS)
+        count = min(neural_cap, len(chunks))
+        if count >= len(chunks):
+            neural_indices = set(range(len(chunks)))
+        elif count == 1:
+            neural_indices = {0}
+        else:
+            neural_indices = {
+                round(i * (len(chunks) - 1) / (count - 1))
+                for i in range(count)
+            }
+
+    map_started = time.time()
+    neural_done = 0
     for c in chunks:
-        c.intermediate_summary = summarize_single_chunk(c)
+        allow_neural = (
+            c.index in neural_indices
+            and neural_done < neural_cap
+            and (time.time() - map_started) < neural_budget
+        )
+        c.intermediate_summary = summarize_single_chunk(c, use_neural=allow_neural)
+        if allow_neural:
+            neural_done += 1
+
+    logger.info(
+        "Hierarchical Summarizer map phase: chunks=%d, neural=%d, extractive=%d, map_time=%.2fs",
+        len(chunks), neural_done, len(chunks) - neural_done, time.time() - map_started,
+    )
 
     # 4. Reduce Phase: Synthesize global Markdown summary
     result = synthesize_markdown_summary(
@@ -438,6 +604,7 @@ def generate_complete_document_summary(
         start_time=start_time,
         length_hint=length_hint,
     )
+    result["neural_chunks"] = neural_done
 
     logger.info(
         "Hierarchical Summarizer complete: chunks=%d, result_len=%d, time=%.2fs",

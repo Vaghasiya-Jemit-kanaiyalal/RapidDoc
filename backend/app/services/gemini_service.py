@@ -40,13 +40,19 @@ from RapidDoc.backend.app.services.local_models import (
     summarize,
 )
 from RapidDoc.backend.app.services.document_text import clean_prose, split_prose_sentences
+from RapidDoc.backend.app.services.keyword_extractor import extract_keywords
 from RapidDoc.backend.app.services.mcq_generator import build_mcq_set
+from RapidDoc.backend.app.services.summary_text import normalize_extracted_text
 from RapidDoc.backend.app.services.slot_extractor import extract_slots
 from RapidDoc.backend.app.services.text_polish import (
     ensure_sentence,
     polish_sentences,
     polish_text,
     split_sentences,
+)
+from RapidDoc.backend.app.services.translation_offline import (
+    translate_offline,
+    is_offline_translation_available,
 )
 
 logger = logging.getLogger(__name__)
@@ -438,6 +444,81 @@ def _fallback_qa_action(prompt: str) -> dict | None:
     return None
 
 
+FALLBACK_KEYWORD_RE = re.compile(
+    r"\b(?:extract|find|list|pull|get|identify|show|give)\b[^.!?\n]{0,60}"
+    r"\b(?:keywords?|key\s*terms?|important\s+terms?)\b|"
+    r"\b(?:keywords?|key\s*terms?)\b\s*(?:from|in|of)\b|"
+    r"\b(?:keyword|key\s*term)\s+(?:extraction|list)\b",
+    re.IGNORECASE,
+)
+
+FALLBACK_TRANSLATE_RE = re.compile(r"\b(?:translate|translation)\b", re.IGNORECASE)
+STUDY_NOTES_RE = re.compile(
+    r"\b(?:study|revision|lecture|class)\s+notes?\b|"
+    r"\b(?:make|create|generate|write)\s+(?:me\s+)?notes?\b",
+    re.IGNORECASE,
+)
+_TRANSLATE_TARGET_RE = re.compile(
+    r"\b(?:translate|translation)\b[^.!?\n]{0,100}?\b(?:in|into|to)\s+"
+    r"([A-Za-z][A-Za-z\- ]{1,30})",
+    re.IGNORECASE,
+)
+
+
+def _clean_target_language(raw: str | None) -> str | None:
+    target = (raw or "").strip(" \t\r\n'\"`.,:;!?")
+    target = re.sub(r"^(?:the\s+)", "", target, flags=re.IGNORECASE)
+    target = re.sub(
+        r"\s+(?:language|version|text)$", "", target, flags=re.IGNORECASE
+    )
+    target = re.split(
+        r"\b(?:and|then|while|without|keeping|preserving|using|but)\b",
+        target,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    target = target.strip(" \t\r\n'\"`.,:;!?")
+    if not target or target.lower() in {
+        "it", "this", "that", "the document", "document", "text", "selection",
+    }:
+        return None
+    return target[:40]
+
+
+def is_study_notes_request(prompt: str) -> bool:
+    """True for explicit note-making requests, not generic Q&A."""
+    return bool(STUDY_NOTES_RE.search(prompt or ""))
+
+
+def _fallback_keyword_action(prompt: str) -> dict | None:
+    if not FALLBACK_KEYWORD_RE.search(prompt or ""):
+        return None
+    count = 12
+    match = _COUNT_RE.search(prompt or "")
+    if match:
+        try:
+            count = int(match.group(1))
+        except (TypeError, ValueError):
+            count = 12
+    return {
+        "action": "extract_keywords",
+        "count": max(1, min(count, 30)),
+        "engine": "rule",
+    }
+
+
+def _fallback_translation_action(prompt: str) -> dict | None:
+    if not FALLBACK_TRANSLATE_RE.search(prompt or ""):
+        return None
+    match = _TRANSLATE_TARGET_RE.search(prompt or "")
+    target = _clean_target_language(match.group(1) if match else None)
+    return {
+        "action": "translate",
+        "target_language": target,
+        "engine": "rule",
+    }
+
+
 FALLBACK_PPT_RE = re.compile(
     r"\b(?:generate|create|make|export|convert|build|produce|design)\s+(?:to\s+|into\s+)?(?:a\s+|an\s+)?(?:presentation|ppt|pptx|slide\s*deck|slides|deck)\b|"
     r"\b(?:presentation|ppt|pptx|slide\s*deck|slides)\s+(?:generation|generator|builder|maker)\b|"
@@ -582,6 +663,22 @@ def _fallback_intent(prompt: str, has_image_upload: bool = False, selection: dic
     if img_act:
         return img_act
 
+    # Keyword extraction (before generic QA wording)
+    keyword_act = _fallback_keyword_action(prompt)
+    if keyword_act:
+        if selection and selection.get("text"):
+            keyword_act["scope"] = "selection"
+        return keyword_act
+
+    # Translation. Translation used to fall through to "rewrite", which
+    # silently converted it into a generic paraphrase. Keep it explicit so the
+    # handler can require a target language and return a useful error.
+    translate_act = _fallback_translation_action(prompt)
+    if translate_act:
+        if selection and selection.get("text"):
+            translate_act["scope"] = "selection"
+        return translate_act
+
     # QA / Key points
     qa_act = _fallback_qa_action(prompt)
     if qa_act:
@@ -709,6 +806,8 @@ Supported Universal Actions:
    {"action": "generate_mcq", "num_questions": 10, "topic": null}
    {"action": "rewrite", "instruction": "...", "scope": "selection"|"paragraph"|"document"}
    {"action": "qa_extract", "query": "..."}  # for "What is this about?", "Find important points", "Create study notes"
+   {"action": "translate", "target_language": "Spanish", "scope": "selection"|"document"}  # omit target_language only if the user did not name one
+   {"action": "extract_keywords", "count": 10, "scope": "selection"|"document"}
 
 8. Mixed / Composite Multi-Step Commands:
    If the user asks for multiple distinct operations in one instruction (e.g. "Replace X with Y, make headings bold, and summarize in 5 points"):
@@ -863,6 +962,9 @@ ACTIONABLE_INTENTS = {
     "summarize_document": "summarize",
     "summarize_page": "summarize",
     "generate_mcq": "generate_mcq",
+    "extract_keywords": "extract_keywords",
+    "generate_notes": "qa_extract",
+    "translate_section": "translate",
 }
 
 # Intents that mean "summarise", and whether a specific page was named.
@@ -945,6 +1047,34 @@ def _local_intent_to_response(prompt: str, intent: str) -> dict:
             "num_questions": max(1, min(count, int(settings.MCQ_MAX_QUESTIONS))),
             "engine": "local",
         }
+    if action == "extract_keywords":
+        count = 12
+        match = _COUNT_RE.search(prompt or "")
+        if match:
+            try:
+                count = int(match.group(1))
+            except (TypeError, ValueError):
+                count = 12
+        return {
+            "action": "extract_keywords",
+            "intent": intent,
+            "count": max(1, min(count, 30)),
+            "engine": "local",
+        }
+    if action == "qa_extract":
+        return {
+            "action": "qa_extract",
+            "intent": intent,
+            "query": prompt,
+            "engine": "local",
+        }
+    if action == "translate":
+        parsed = _fallback_translation_action(prompt) or {
+            "action": "translate", "target_language": None,
+        }
+        parsed["intent"] = intent
+        parsed["engine"] = "local"
+        return parsed
     return None
 
 
@@ -959,9 +1089,11 @@ def understand_command(
 
     Execution priority:
     1. Exact direct replacement (100% deterministic character-for-character preservation).
-    2. Local intent classifier brain.
-    3. Rule engine (table, heading, header/footer, image, MCQ, summary).
-    4. Gemini Universal Orchestrator with context & multi-action planning.
+    2. Explicit image attachment/listing commands.
+    3. Deterministic keyword, translation, and study-note commands.
+    4. Local intent classifier brain.
+    5. Gemini Universal Orchestrator with context & multi-action planning.
+    6. Rule engine fallback.
     """
     prompt = (prompt or "").strip()
     if not prompt:
@@ -981,7 +1113,53 @@ def understand_command(
         logger.info("Image upload + image wording '%s' -> replace_image (regex)", prompt)
         return {"action": "replace_image", "engine": "regex"}
 
-    # 3. Local fine-tuned intent brain (if available)
+    # 3. Deterministic read-only AI commands. These bypass the intent brain:
+    # a misclassified local intent must never turn a translation into a summary
+    # or keyword extraction into a rewrite.
+    keyword_action = _fallback_keyword_action(prompt)
+    if keyword_action:
+        if selection and selection.get("text"):
+            keyword_action["scope"] = "selection"
+        keyword_action["engine"] = "regex"
+        return keyword_action
+
+    translation_action = _fallback_translation_action(prompt)
+    if translation_action:
+        if selection and selection.get("text"):
+            translation_action["scope"] = "selection"
+        translation_action["engine"] = "regex"
+        return translation_action
+
+    if is_study_notes_request(prompt):
+        return {"action": "qa_extract", "query": prompt, "engine": "rule"}
+
+    # Explicit presentation and rewrite requests are unambiguous. The local
+    # intent brain has been observed routing these to "summarize"; name-based
+    # detection must win before the classifier sees them.
+    presentation_action = _fallback_presentation_action(prompt)
+    if presentation_action:
+        presentation_action.setdefault("engine", "regex")
+        return presentation_action
+
+    if (
+        (selection and selection.get("text") and (
+            FALLBACK_REWRITE_RE.search(prompt) or GRAMMAR_INTENT_RE.search(prompt)
+        ))
+        or re.match(
+            r"^(?:please\s+)?(?:rewrite|rephrase|paraphrase|proofread|correct|fix)\b",
+            prompt,
+            re.IGNORECASE,
+        )
+    ):
+        return {
+            "action": "rewrite",
+            "instruction": prompt,
+            "scope": "selection" if (selection and selection.get("text")) else "document",
+            "source_text": selection.get("text") if selection else None,
+            "engine": "rule",
+        }
+
+    # 4. Local fine-tuned intent brain (if available)
     local = classify_intent(prompt)
     threshold = intent_confidence_threshold()
     if local and local.get("confidence", 0.0) >= threshold:
@@ -990,14 +1168,14 @@ def understand_command(
             response["confidence"] = round(local["confidence"], 4)
             return response
 
-    # 4. Universal Gemini Orchestrator (handles multi-action, context, coreference)
+    # 5. Universal Gemini Orchestrator (handles multi-action, context, coreference)
     gemini_intent = _understand_with_gemini(
         prompt, has_image_upload=has_image_upload, history=history, selection=selection, image_base64=image_base64
     )
     if gemini_intent and gemini_intent.get("action") != "unknown":
         return gemini_intent
 
-    # 5. High-precision rule engine fallback
+    # 6. High-precision rule engine fallback
     rule_intent = _fallback_intent(prompt, has_image_upload, selection=selection)
     if rule_intent.get("action") != "unknown":
         rule_intent.setdefault("engine", "regex")
@@ -1042,6 +1220,199 @@ def answer_or_extract_with_gemini(text: str, query: str) -> str:
         logger.error("Error in answer_or_extract_with_gemini: %s", exc)
         return f"Unable to analyze document: {str(exc)}"
 
+
+
+def _markdown_section(markdown: str, heading: str) -> str:
+    """Return one ``##`` section body without its heading."""
+    match = re.search(
+        rf"^##\s+{re.escape(heading)}\s*$(.*?)(?=^##\s+|\Z)",
+        markdown or "",
+        re.MULTILINE | re.DOTALL,
+    )
+    return match.group(1).strip() if match else ""
+
+
+def generate_study_notes(text: str, title: str = "Document") -> dict:
+    """Build structured study notes from the document's own summary.
+
+    This is deterministic and offline. It deliberately reuses the hierarchical
+    summarizer instead of returning the first five lines, which was not notes.
+    """
+    source = (text or "").strip()
+    if len(source) < 30:
+        return {
+            "notes": "",
+            "engine": "none",
+            "keywords": [],
+            "key_points": [],
+            "message": "I could not find enough readable text to build study notes.",
+        }
+
+    summary_result = summarize_document(source, "brief", title or "Document")
+    summary = summary_result.get("summary") or ""
+    key_points = [
+        re.sub(r"\s+", " ", point).strip()
+        for point in (summary_result.get("key_points") or [])
+        if point and point.strip()
+    ]
+    overview = _markdown_section(summary, "Overview")
+    overview = re.sub(
+        r"^>\s*\*\*Executive Brief\*\*:\s*", "", overview, flags=re.IGNORECASE
+    ).strip()
+    overview = re.sub(r"\s+", " ", overview).strip()
+    if not overview and key_points:
+        overview = re.sub(r"\s+", " ", key_points[0]).strip()
+
+    # If the summary has too few key points, use bullet lines from its Key
+    # Points section and sentences from the overview so notes remain useful for
+    # short documents instead of containing a single bullet.
+    if len(key_points) < 3:
+        for line in _markdown_section(summary, "Key Points").splitlines():
+            point = re.sub(r"^[-*]\s+", "", line).strip()
+            if point and point not in key_points:
+                key_points.append(point)
+    if len(key_points) < 3 and overview:
+        for sentence in re.split(r"(?<=[.!?])\s+", overview):
+            point = sentence.strip()
+            if len(point) >= 25 and point not in key_points:
+                key_points.append(point)
+            if len(key_points) >= 3:
+                break
+
+    keywords = extract_keywords(source, 10)
+    display_title = title or "Document"
+    lines = [
+        f"# Study Notes: {display_title}",
+        "",
+        "## Overview",
+        overview or "The document does not contain enough prose for an overview.",
+        "",
+        "## Key Terms",
+    ]
+    if keywords:
+        lines.extend(f"- {term}" for term in keywords)
+    else:
+        lines.append("- No repeated key terms were found.")
+
+    lines.extend(["", "## Key Points"])
+    if key_points:
+        lines.extend(f"- {point.rstrip('.')}" for point in key_points[:8])
+    else:
+        lines.append("- Review the document overview above.")
+
+    lines.extend(["", "## Active Recall"])
+    focus_points = key_points[:3] or [overview]
+    question_count = 0
+    for point in focus_points:
+        focus = re.sub(r"\s+", " ", point).strip().rstrip(".")
+        focus = focus[:160]
+        if focus:
+            lines.append(
+                f"- Explain the significance of “{focus}” in your own words."
+            )
+            question_count += 1
+    if question_count:
+        lines.append("- What evidence in the document supports these points?")
+    else:
+        lines.append("- What are the main ideas presented in this document?")
+
+    return {
+        "notes": "\n".join(lines).strip(),
+        "engine": f"{summary_result.get('engine', 'summarizer')}+keywords",
+        "keywords": keywords,
+        "key_points": key_points[:8],
+        "message": f"Generated structured study notes from {len(source):,} characters.",
+    }
+
+
+def translate_text(text: str, target_language: str, source_lang: str = "english") -> dict:
+    """Translate `text` with Gemini, falling back to offline Argos translation.
+
+    Priority:
+    1. Gemini (if API key configured and quota available)
+    2. Offline Argos translation (no API key, no quota limits)
+    3. Clear error message if both unavailable
+    """
+    source = (text or "").strip()
+    target = _clean_target_language(target_language)
+    source_norm = _clean_target_language(source_lang) or "english"
+
+    if not source:
+        return {
+            "translated_text": "",
+            "engine": "none",
+            "target_language": target,
+            "message": "There is no text to translate.",
+        }
+    if not target:
+        return {
+            "translated_text": "",
+            "engine": "none",
+            "target_language": None,
+            "message": "Tell me which language to translate into, for example “Translate this to Spanish”.",
+        }
+
+    # Try Gemini first
+    model = _gemini_client()
+    if model is not None:
+        clipped = source[:12000]
+        try:
+            prompt = (
+                "You are the translation engine for RapidDoc.\n"
+                f"Translate the following text into {target}. Preserve paragraph breaks, "
+                "headings, lists, numbers, names, and markdown formatting. Return only "
+                "the translation, with no preamble or notes.\n\n"
+                f"{clipped}"
+            )
+            resp = model.generate_content(prompt)
+            translated = (resp.text or "").strip()
+            if translated:
+                message = f"Translated {min(len(source), 12000):,} characters into {target} (Gemini)."
+                if len(source) > 12000:
+                    message += " The document was longer than 12,000 characters; this is the translated opening section."
+                return {
+                    "translated_text": translated,
+                    "engine": "gemini",
+                    "target_language": target,
+                    "characters": min(len(source), 12000),
+                    "truncated": len(source) > 12000,
+                    "message": message,
+                }
+        except Exception as exc:
+            logger.warning("Gemini translation failed, falling back to offline: %s", exc)
+            # Fall through to offline translation
+
+    # Offline fallback (Argos Translate)
+    offline_result = translate_offline(source, source_norm, target)
+    if offline_result:
+        return {
+            "translated_text": offline_result,
+            "engine": "argos",
+            "target_language": target,
+            "characters": len(source),
+            "truncated": False,
+            "message": f"Translated {len(source):,} characters into {target} (offline).",
+        }
+
+    # Both failed
+    offline_available = is_offline_translation_available(source_norm, target)
+    if not offline_available:
+        return {
+            "translated_text": "",
+            "engine": "none",
+            "target_language": target,
+            "message": (
+                f"Translation to {target} is not available offline. "
+                "Add GEMINI_API_KEY for cloud translation, or the language pair may not be supported."
+            ),
+        }
+
+    return {
+        "translated_text": "",
+        "engine": "none",
+        "target_language": target,
+        "message": "Translation failed. Both Gemini and offline engines are unavailable.",
+    }
 
 
 def rewrite_text(instruction: str, text: str) -> dict:
@@ -1637,7 +2008,9 @@ def generate_mcqs(text: str, count: int = 5) -> dict:
     """
     # Question stems are built from document sentences; a stem made of source code
     # is unanswerable, so the code is removed before the builder sees the text.
-    text = clean_prose((text or "").strip())
+    # Normalisation also re-joins hard-wrapped PDF lines: without it every line
+    # became its own "sentence" and produced fill-in-the-blank fragments.
+    text = normalize_extracted_text(clean_prose((text or "").strip()))
     try:
         count = int(count)
     except (TypeError, ValueError):
@@ -1677,7 +2050,7 @@ def generate_mcqs(text: str, count: int = 5) -> dict:
                     "question": q["question"],
                     "options": list(q["options"]),
                     "answer": q["answer"],
-                    "type": q.get("type") or "recall",
+                    "type": q.get("type") or "statement",
                     "complete": True,
                 })
     except Exception:

@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import hmac
+import secrets
+import string
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -9,7 +12,17 @@ import logging
 
 from RapidDoc.backend.app.config import settings
 from RapidDoc.backend.app.database import db_conn
-from RapidDoc.backend.app.models import UserRegister, UserLogin, UserResponse, Token, TokenData
+from RapidDoc.backend.app.services.email_service import send_otp_email
+from RapidDoc.backend.app.models import (
+    UserRegister,
+    UserLogin,
+    UserResponse,
+    Token,
+    TokenData,
+    ForgotPasswordRequest,
+    VerifyOTPRequest,
+    ResetPasswordRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +30,20 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+
+# In-memory OTP store (for development; use Redis/DB in production)
+# email -> {"otp", "expires_at", "attempts", "verified", "created_at"}
+otp_store = {}
+
+
+def _normalize_email(email: str) -> str:
+    return email.lower().strip()
+
+
+def _prune_expired_otps() -> None:
+    now = datetime.now(timezone.utc)
+    for key in [k for k, v in otp_store.items() if now > v["expires_at"]]:
+        otp_store.pop(key, None)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -77,8 +104,11 @@ async def register(user_data: UserRegister):
             detail=str(e)
         )
 
+    # Normalize email
+    email = user_data.email.lower().strip()
+    
     # Check if email already exists
-    existing_user = db.users.find_one({"email": user_data.email})
+    existing_user = db.users.find_one({"email": email})
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -87,10 +117,10 @@ async def register(user_data: UserRegister):
 
     hashed_password = get_password_hash(user_data.password)
     
-    # Create user document (not storing registration date, as requested)
+    # Create user document
     user_doc = {
-        "email": user_data.email,
-        "name": user_data.name,
+        "email": email,
+        "name": user_data.name.strip(),
         "hashed_password": hashed_password
     }
     
@@ -98,8 +128,8 @@ async def register(user_data: UserRegister):
     
     return UserResponse(
         id=str(result.inserted_id),
-        email=user_data.email,
-        name=user_data.name
+        email=email,
+        name=user_data.name.strip()
     )
 
 @router.post("/login", response_model=Token)
@@ -112,7 +142,8 @@ async def login(user_data: UserLogin):
             detail=str(e)
         )
 
-    user = db.users.find_one({"email": user_data.email})
+    email = user_data.email.lower().strip()
+    user = db.users.find_one({"email": email})
     if not user or not verify_password(user_data.password, user["hashed_password"]):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -135,3 +166,215 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         email=current_user["email"],
         name=current_user["name"]
     )
+
+
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest):
+    try:
+        db = db_conn.get_db()
+    except ConnectionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )
+
+    email = _normalize_email(request.email)
+
+    # Only registered emails can start a reset; the account must exist.
+    user = db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with this email address"
+        )
+
+    _prune_expired_otps()
+    now = datetime.now(timezone.utc)
+
+    # Simple resend cooldown so the endpoint cannot be used to spam a mailbox.
+    existing = otp_store.get(email)
+    if existing:
+        elapsed = (now - existing["created_at"]).total_seconds()
+        remaining = settings.OTP_RESEND_COOLDOWN_SECONDS - int(elapsed)
+        if remaining > 0:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Please wait {remaining}s before requesting another OTP."
+            )
+
+    otp = "".join(secrets.choice(string.digits) for _ in range(6))
+    expires_at = now + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
+
+    otp_store[email] = {
+        "otp": otp,
+        "expires_at": expires_at,
+        "attempts": 0,
+        "verified": False,
+        "created_at": now,
+    }
+
+    email_sent = send_otp_email(email, otp, user.get("name"))
+
+    # With no working mailer the OTP is surfaced for local/demo use so the
+    # flow stays testable. Never expose it once email delivery succeeds.
+    expose_otp = settings.OTP_DEV_MODE and not email_sent
+
+    if not email_sent and not settings.OTP_DEV_MODE:
+        del otp_store[email]
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="We could not send the OTP email. Please try again later."
+        )
+
+    logger.info(
+        "Password reset OTP generated for %s (emailed=%s, exposed=%s)",
+        email, email_sent, expose_otp,
+    )
+    return {
+        "message": (
+            "A password reset OTP has been sent to your email address."
+            if email_sent
+            else "OTP generated in development mode."
+        ),
+        "email_sent": email_sent,
+        "dev_otp": otp if expose_otp else None,
+        "expires_in": settings.OTP_EXPIRE_MINUTES * 60,
+    }
+
+
+@router.post("/verify-otp")
+async def verify_otp(request: VerifyOTPRequest):
+    try:
+        db = db_conn.get_db()
+    except ConnectionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )
+
+    email = _normalize_email(request.email)
+
+    user = db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid email or OTP"
+        )
+
+    stored = otp_store.get(email)
+    if not stored:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OTP. Please request a new one."
+        )
+
+    if datetime.now(timezone.utc) > stored["expires_at"]:
+        del otp_store[email]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP has expired. Please request a new one."
+        )
+
+    if stored["attempts"] >= settings.OTP_MAX_ATTEMPTS:
+        del otp_store[email]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many failed attempts. Please request a new OTP."
+        )
+
+    if not hmac.compare_digest(stored["otp"], request.otp):
+        stored["attempts"] += 1
+        left = settings.OTP_MAX_ATTEMPTS - stored["attempts"]
+        if left <= 0:
+            del otp_store[email]
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Too many failed attempts. Please request a new OTP."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid OTP. {left} attempt(s) remaining."
+        )
+
+    # Verified: allow exactly one password reset with this code.
+    stored["verified"] = True
+    stored["attempts"] = 0
+    otp_store[email] = stored
+
+    return {"message": "OTP verified successfully", "verified": True}
+
+
+@router.post("/reset-password")
+async def reset_password(request: ResetPasswordRequest):
+    try:
+        db = db_conn.get_db()
+    except ConnectionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e)
+        )
+
+    email = _normalize_email(request.email)
+
+    user = db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid password reset request."
+        )
+
+    stored = otp_store.get(email)
+    if not stored:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired OTP. Please start again."
+        )
+
+    if datetime.now(timezone.utc) > stored["expires_at"]:
+        del otp_store[email]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OTP has expired. Please start again."
+        )
+
+    if stored["attempts"] >= settings.OTP_MAX_ATTEMPTS:
+        del otp_store[email]
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Too many failed attempts. Please request a new OTP."
+        )
+
+    if not hmac.compare_digest(stored["otp"], request.otp):
+        stored["attempts"] += 1
+        otp_store[email] = stored
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid OTP."
+        )
+
+    # The OTP must have passed /verify-otp first.
+    if not stored.get("verified"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please verify the OTP before resetting your password."
+        )
+
+    # Refuse to reuse the current password so a reset is a real change.
+    if verify_password(request.new_password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your new password must be different from your current password."
+        )
+
+    hashed_password = get_password_hash(request.new_password)
+    db.users.update_one(
+        {"email": email},
+        {"$set": {"hashed_password": hashed_password}}
+    )
+
+    # Single-use: burn the OTP after a successful reset.
+    otp_store.pop(email, None)
+
+    logger.info("Password reset completed for %s", email)
+    return {"message": "Password reset successfully. You can now log in."}
+

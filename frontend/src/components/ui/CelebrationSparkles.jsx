@@ -185,37 +185,41 @@ export const CelebrationSparkles = ({
   }, [duration, onComplete]);
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden select-none">
-      
-      {/* ── Lightweight 60FPS Canvas ── */}
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none z-10" />
+    <div className="fixed inset-0 z-50 overflow-hidden select-none">
+      {/* Canvas layer — full screen, non-interactive */}
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 w-full h-full pointer-events-none z-10"
+        aria-hidden="true"
+      />
 
-      {/* ── Clean Celebration Banner (No AI symbols, Vercel optimized) ── */}
-      <AnimatePresence>
-        {showToast && (
-          <motion.div
-            initial={{ opacity: 0, y: -40, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -25, scale: 0.95 }}
-            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute top-6 left-1/2 -translate-x-1/2 pointer-events-auto z-20 flex items-center gap-3 px-5 py-3 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-[0_15px_40px_-10px_rgba(54,92,255,0.2),0_4px_12px_rgba(0,0,0,0.05)]"
-          >
-            <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-brand-50 border border-brand-100 text-lg shadow-2xs">
-              🎉
-            </div>
+      {/* Toast layer — centered viewport, interactive */}
+      <div className="fixed inset-0 z-20 flex items-start justify-center pt-6 pointer-events-none sm:pt-10">
+        <AnimatePresence>
+          {showToast && (
+            <motion.div
+              initial={{ opacity: 0, y: -40, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -25, scale: 0.95 }}
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+              className="pointer-events-auto w-full max-w-xl px-6 py-4 flex items-center gap-4 bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-[0_15px_40px_-10px_rgba(54,92,255,0.2),0_4px_12px_rgba(0,0,0,0.05)]"
+            >
+              <div className="flex-shrink-0 flex items-center justify-center w-9 h-9 rounded-xl bg-brand-50 border border-brand-100 text-lg shadow-2xs">
+                🎉
+              </div>
 
-            <div className="text-left pr-1">
-              <h4 className="text-sm font-extrabold text-slate-900 tracking-tight">
-                {title}
-              </h4>
-              <p className="text-xs text-slate-500 font-medium">
-                {subtitle}
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
+              <div className="text-left pr-1">
+                <h4 className="text-sm font-extrabold text-slate-900 tracking-tight">
+                  {title}
+                </h4>
+                <p className="text-xs text-slate-500 font-medium">
+                  {subtitle}
+                </p>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 };

@@ -231,5 +231,29 @@ class PipelineUpdateRequest(BaseModel):
     draft_edits: Optional[Dict[str, Any]] = None
 
 
+class SupportIssueRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=80)
+    email: EmailStr
+    category: str = Field(default="General question", max_length=60)
+    subject: str = Field(..., min_length=3, max_length=120)
+    message: str = Field(..., min_length=10, max_length=5000)
+    page_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyOTPRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP code")
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=6, max_length=6, description="6-digit OTP code")
+    new_password: str = Field(..., min_length=6, description="New password must be at least 6 characters")
+
+
 
 

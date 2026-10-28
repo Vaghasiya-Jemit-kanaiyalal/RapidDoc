@@ -39,7 +39,9 @@ from RapidDoc.backend.app.services.image_resolver import (
 )
 from RapidDoc.backend.app.services.gemini_service import (
     generate_mcqs, summarize_document, understand_command, rewrite_text,
-    describe_image_with_gemini, answer_or_extract_with_gemini
+    describe_image_with_gemini, answer_or_extract_with_gemini,
+    generate_study_notes, translate_text, is_study_notes_request,
+    extract_keywords as extract_keywords_from_text,
 )
 from RapidDoc.backend.app.services.export_service import (
     build_docx_bytes_with_status, build_pdf_bytes,
@@ -382,6 +384,7 @@ async def upload_document(
         # Build DB document metadata (no upload timestamp, upload_date YYYY-MM-DD only)
         upload_date_str = datetime.now().strftime("%Y-%m-%d")
 
+        now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
         doc_metadata = {
             "name": file.filename,
             "file_type": ext.lstrip("."),
@@ -392,7 +395,8 @@ async def upload_document(
             "pipeline_stage": 1,
             "pipeline_status": "In Progress",
             "completion_percent": 25,
-            "last_edited_date": upload_date_str,
+            "last_edited_date": now_ts,
+            "last_opened_at": now_ts,
             "draft_edits": {},
             "edit_history": [
                 {
@@ -988,6 +992,16 @@ async def get_document_content(
         doc = db.documents.find_one({"_id": ObjectId(doc_id), "owner_id": current_user["id"]})
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Track when user opens/edits this document
+        try:
+            now_ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+            db.documents.update_one(
+                {"_id": ObjectId(doc_id), "owner_id": current_user["id"]},
+                {"$set": {"last_opened_at": now_ts}}
+            )
+        except Exception:
+            pass
         
         file_path = storage_service.get_file_path(doc["storage_path"])
         
@@ -2638,21 +2652,150 @@ async def ai_command_endpoint(
                 "message": f"Done — rewritten following instruction '{instruction}'.",
             }
 
-        if action == "qa_extract":
-            source_text = ""
-            if request.selection and request.selection.text:
+        if action == "extract_keywords":
+            source_text = _explicit_text(request)
+            if not source_text and request.selection and request.selection.text:
                 source_text = request.selection.text
-            else:
+            source_label = (
+                "selected text"
+                if (request.selection and request.selection.text)
+                else ("provided text" if source_text else "whole document")
+            )
+            if not source_text:
                 source_text = await run_in_threadpool(
                     _document_text, file_path, doc["file_type"]
                 )
             if not source_text:
                 return {
-                    "status": "success",
+                    "status": "error",
+                    "action": "extract_keywords",
+                    "engine": "keyword_extractor",
+                    "message": "I could not find any readable text to extract keywords from.",
+                }
+
+            count = intent.get("count") or 12
+            try:
+                count = max(1, min(int(count), 30))
+            except (TypeError, ValueError):
+                count = 12
+            keywords = await run_in_threadpool(
+                extract_keywords_from_text, source_text, count
+            )
+            if not keywords:
+                return {
+                    "status": "error",
+                    "action": "extract_keywords",
+                    "engine": "keyword_extractor",
+                    "source": source_label,
+                    "message": "I could not find repeated meaningful terms in this text.",
+                }
+            return {
+                "status": "success",
+                "action": "extract_keywords",
+                "intent": intent.get("intent"),
+                "engine": "keyword_extractor",
+                "source": source_label,
+                "keywords": keywords,
+                "count": len(keywords),
+                "message": f"Extracted {len(keywords)} keywords from the {source_label}.",
+            }
+
+        if action == "translate":
+            source_text = _explicit_text(request)
+            if not source_text and request.selection and request.selection.text:
+                source_text = request.selection.text
+            source_label = (
+                "selected text"
+                if (request.selection and request.selection.text)
+                else ("provided text" if source_text else "whole document")
+            )
+            if not source_text:
+                source_text = await run_in_threadpool(
+                    _document_text, file_path, doc["file_type"]
+                )
+            if not source_text:
+                return {
+                    "status": "error",
+                    "action": "translate",
+                    "engine": "none",
+                    "target_language": intent.get("target_language"),
+                    "message": "I could not find any readable text to translate.",
+                }
+
+            result = await run_in_threadpool(
+                translate_text, source_text, intent.get("target_language") or ""
+            )
+            if not result.get("translated_text"):
+                return {
+                    "status": "error",
+                    "action": "translate",
+                    "engine": result.get("engine", "none"),
+                    "target_language": result.get("target_language"),
+                    "source": source_label,
+                    "message": result.get("message") or "Translation is unavailable right now.",
+                }
+            return {
+                "status": "success",
+                "action": "translate",
+                "intent": intent.get("intent"),
+                "engine": result.get("engine"),
+                "target_language": result.get("target_language"),
+                "translated_text": result.get("translated_text"),
+                "source": source_label,
+                "truncated": bool(result.get("truncated")),
+                "message": result.get("message") or "Translation complete.",
+            }
+
+        if action == "qa_extract":
+            source_text = _explicit_text(request)
+            if not source_text and request.selection and request.selection.text:
+                source_text = request.selection.text
+            if not source_text:
+                source_text = await run_in_threadpool(
+                    _document_text, file_path, doc["file_type"]
+                )
+            if not source_text:
+                return {
+                    "status": "error",
                     "action": "qa_extract",
                     "message": "I could not find any readable text in this document.",
                 }
-            query = intent.get("question") or intent.get("instruction") or request.command
+            query = (
+                intent.get("query")
+                or intent.get("question")
+                or intent.get("instruction")
+                or request.command
+            )
+
+            # Study notes get a dedicated offline structure. Generic Q&A still
+            # uses Gemini when it is configured.
+            if is_study_notes_request(query):
+                doc_title = doc.get("name") or doc.get("title") or "Document"
+                notes_result = await run_in_threadpool(
+                    generate_study_notes, source_text, doc_title
+                )
+                if not notes_result.get("notes"):
+                    return {
+                        "status": "error",
+                        "action": "qa_extract",
+                        "engine": notes_result.get("engine", "none"),
+                        "query": query,
+                        "message": notes_result.get("message")
+                        or "Study notes could not be generated from this document.",
+                    }
+                return {
+                    "status": "success",
+                    "action": "qa_extract",
+                    "format": "study_notes",
+                    "engine": notes_result.get("engine"),
+                    "query": query,
+                    "answer": notes_result["notes"],
+                    "notes": notes_result["notes"],
+                    "keywords": notes_result.get("keywords") or [],
+                    "key_points": notes_result.get("key_points") or [],
+                    "message": notes_result.get("message") or "Study notes generated.",
+                }
+
             answer = await run_in_threadpool(
                 answer_or_extract_with_gemini, source_text, query
             )

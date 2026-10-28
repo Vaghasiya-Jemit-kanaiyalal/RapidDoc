@@ -1650,6 +1650,30 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
             engine: data.engine || 'local',
           });
         }
+      } else if (data.action === 'extract_keywords') {
+        const keywords = data.keywords || [];
+        if (data.status === 'error' || keywords.length === 0) {
+          setAiResult(data.message || 'I could not extract keywords from this text.');
+        } else {
+          setAiSummary({
+            summary: `# Keyword Extraction\n\n${keywords.map((keyword, index) => `${index + 1}. ${keyword}`).join('\n')}`,
+            source: data.source || 'document',
+            engine: data.engine || 'keyword_extractor',
+            key_points: keywords,
+          });
+          setAiResult(data.message || `Extracted ${keywords.length} keywords.`);
+        }
+      } else if (data.action === 'translate') {
+        if (data.status === 'error' || !data.translated_text) {
+          setAiResult(data.message || 'Translation is unavailable right now.');
+        } else {
+          setAiSummary({
+            summary: `# Translation: ${data.target_language || 'Translated Text'}\n\n${data.translated_text}`,
+            source: data.source || 'document',
+            engine: data.engine || 'gemini',
+          });
+          setAiResult(data.message || `Translated into ${data.target_language || 'the target language'}.`);
+        }
       } else if (data.action === 'qa_extract') {
         setAiSummary({
           summary: `# Document Analysis & Notes\n\n${data.answer || data.message}`,
@@ -3692,6 +3716,48 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                   <span className="text-[10px] text-slate-400 ml-1.5">5 interactive MCQs</span>
                 </div>
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAiPrompt('Create study notes from this document');
+                  setSlashMenuOpen(false);
+                }}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-left rounded-lg hover:bg-emerald-50 hover:text-emerald-700 text-xs text-slate-700 font-medium transition"
+              >
+                <div className="p-1 rounded bg-emerald-100 text-emerald-600 font-bold text-[10px]">/notes</div>
+                <div>
+                  <span className="font-bold">Study Notes</span>
+                  <span className="text-[10px] text-slate-400 ml-1.5">Structured notes &amp; recall questions</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAiPrompt('Extract 10 keywords from this document');
+                  setSlashMenuOpen(false);
+                }}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-left rounded-lg hover:bg-cyan-50 hover:text-cyan-700 text-xs text-slate-700 font-medium transition"
+              >
+                <div className="p-1 rounded bg-cyan-100 text-cyan-700 font-bold text-[10px]">/keywords</div>
+                <div>
+                  <span className="font-bold">Keyword Extraction</span>
+                  <span className="text-[10px] text-slate-400 ml-1.5">Rank key terms and phrases</span>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAiPrompt('Translate this document to Spanish');
+                  setSlashMenuOpen(false);
+                }}
+                className="flex items-center gap-2 px-2.5 py-1.5 text-left rounded-lg hover:bg-rose-50 hover:text-rose-700 text-xs text-slate-700 font-medium transition"
+              >
+                <div className="p-1 rounded bg-rose-100 text-rose-600 font-bold text-[10px]">/translate</div>
+                <div>
+                  <span className="font-bold">Translate</span>
+                  <span className="text-[10px] text-slate-400 ml-1.5">Document or selection into another language</span>
+                </div>
+              </button>
             </div>
           )}
 
@@ -3736,6 +3802,27 @@ export const DocumentWorkspace = ({ document: initialDoc, token, onBack, onHome 
                 className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-amber-300 hover:text-amber-600 transition"
               >
                 /quiz
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiPrompt('Create study notes from this document')}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-emerald-300 hover:text-emerald-600 transition"
+              >
+                /notes
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiPrompt('Extract 10 keywords from this document')}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-cyan-300 hover:text-cyan-700 transition"
+              >
+                /keywords
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiPrompt('Translate this document to Spanish')}
+                className="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-rose-300 hover:text-rose-600 transition"
+              >
+                /translate
               </button>
             </div>
             <div className="flex items-center gap-2">

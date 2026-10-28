@@ -30,3 +30,4 @@ Pillow>=10.0.0
 # High-fidelity PDF -> DOCX conversion (rebuilds real paragraphs, tables,
 # fonts and layout instead of dumping flattened plain text)
 pdf2docx==0.5.13
+argostranslate>=1.9.0
